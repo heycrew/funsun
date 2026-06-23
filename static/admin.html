@@ -53,9 +53,13 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
 
 <div id="tab-api" class="tab">
     <div class="card"><h3>DeepSeek API 配置</h3>
-        <label>API Key</label><input id="apiKey">
+        <label>API Key</label>
+        <div style="display:flex;gap:8px">
+            <input id="apiKey" type="password" style="flex:1" autocomplete="off">
+            <button class="btn" style="padding:8px 12px" onclick="toggleApiKey()" title="显示/隐藏">👁</button>
+        </div>
         <label>Base URL</label><input id="apiUrl">
-        <label>Model</label><input id="apiModel">
+        <label>Model</label><input id="apiModel" placeholder="deepseek-v4-pro">
         <button class="btn" onclick="doSaveApi()">保存</button>
     </div>
 </div>
@@ -146,6 +150,11 @@ function loadConfig(){
         document.getElementById('ttsCtx').value=d.tts_context||'';
     });
 }
+function toggleApiKey(){
+    var el=document.getElementById('apiKey');
+    el.type=(el.type==='password')?'text':'password';
+}
+
 function doSaveApi(){
     gCfg.deepseek_api_key=document.getElementById('apiKey').value;
     gCfg.deepseek_base_url=document.getElementById('apiUrl').value;
