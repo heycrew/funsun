@@ -3,3 +3,8 @@ cache/
 funsun_state.json
 __pycache__/
 *.pyc
+
+static/*.mp3
+static/*.wav
+data/users.json
+data/config.json
