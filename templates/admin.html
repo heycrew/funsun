@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理后台</title>
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f7fa;min-height:100vh}
+        .header{background:#2c3e50;color:#fff;padding:14px 24px;display:flex;align-items:center;justify-content:space-between}
+        .header h1{font-size:1.2em}.header a{color:#fff;text-decoration:none;opacity:.8;font-size:.9em}
+        .nav{background:#fff;display:flex;border-bottom:2px solid #e0e4e8;padding:0 24px}
+        .nav button{padding:12px 20px;border:none;background:none;cursor:pointer;font-size:.9em;border-bottom:2px solid transparent;margin-bottom:-2px;color:#666}
+        .nav button.active{border-bottom-color:#2c3e50;color:#2c3e50;font-weight:600}
+        .content{padding:20px 24px;max-width:900px;margin:0 auto}
+        .tab{display:none}.tab.active{display:block}
+        .card{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+        .card h3{font-size:1em;margin-bottom:14px;color:#333}
+        label{display:block;margin-bottom:4px;color:#555;font-size:.85em}
+        input,textarea,select{width:100%;padding:8px 12px;border:1.5px solid #ddd;border-radius:6px;font-size:.9em;margin-bottom:10px;outline:none;font-family:inherit}
+        input:focus,textarea:focus{border-color:#5b8def}
+        textarea{resize:vertical;min-height:80px}
+        button.btn{padding:8px 20px;background:#5b8def;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.9em}.btn:hover{opacity:.9}
+        .btn-danger{background:#e74c3c}.btn-sm{padding:3px 10px;font-size:.8em}
+        table{width:100%;border-collapse:collapse;font-size:.9em}
+        th{background:#f0f4f8;padding:10px;text-align:left;font-weight:600;color:#555}
+        td{padding:10px;border-bottom:1px solid #f0f0f0}
+        .tag{padding:2px 8px;border-radius:4px;font-size:.8em}.tag-admin{background:#ffe0e0;color:#c0392b}.tag-user{background:#e0f0ff;color:#2980b9}
+        .msg{padding:8px 14px;border-radius:6px;margin-bottom:10px;font-size:.85em}.msg-ok{background:#e8f5e9;color:#2e7d32}.msg-err{background:#ffe0e0;color:#c0392b}
+        .inline{display:flex;gap:8px}.inline>*{flex:1}
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>⚙ 管理后台</h1>
+    <div><span id="adminUser"></span> | <a href="/">返回首页</a> | <a href="/api/logout">退出</a></div>
+</div>
+<div class="nav">
+    <button class="active" id="nav-users" onclick="tab('users',this)">用户管理</button>
+    <button id="nav-api" onclick="tab('api',this)">API配置</button>
+    <button id="nav-prompt" onclick="tab('prompt',this)">提示词管理</button>
+    <button id="nav-password" onclick="tab('password',this)">修改密码</button>
+</div>
+<div class="content">
+    <div id="msg"></div>
+
+    <div id="tab-users" class="tab active">
+        <div class="card"><h3>新增用户</h3>
+            <div class="inline">
+                <input id="newUser" placeholder="用户名"><input id="newPass" type="password" placeholder="密码">
+                <select id="newRole"><option value="user">普通用户</option><option value="admin">管理员</option></select>
+                <button class="btn" onclick="addUser()">新增</button>
+            </div>
+        </div>
+        <div class="card"><h3>用户列表</h3><table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="userList"></tbody></table></div>
+    </div>
+
+    <div id="tab-api" class="tab">
+        <div class="card"><h3>DeepSeek API 配置</h3>
+            <label>API Key</label><input id="apiKey">
+            <label>Base URL</label><input id="apiUrl">
+            <label>Model</label><input id="apiModel">
+            <button class="btn" onclick="saveApi()">保存</button>
+        </div>
+    </div>
+
+    <div id="tab-prompt" class="tab">
+        <div class="card"><h3>固定模板</h3>
+            <p style="color:#888;font-size:.8em;margin-bottom:8px">[]中的内容对应飞书拍品字段名</p>
+            <textarea id="tpl" rows="3"></textarea>
+        </div>
+        <div class="card"><h3>AI 查询提示词</h3>
+            <p style="color:#888;font-size:.8em;margin-bottom:8px">DeepSeek 生成解说稿时使用的提示词</p>
+            <textarea id="aiPrompt" rows="5"></textarea>
+        </div>
+        <button class="btn" onclick="savePrompt()">保存提示词</button>
+    </div>
+
+    <div id="tab-password" class="tab">
+        <div class="card"><h3>修改当前账号密码</h3>
+            <label>旧密码</label><input id="oldPw" type="password">
+            <label>新密码</label><input id="newPw" type="password">
+            <button class="btn" onclick="changePw()">修改密码</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var config={};
+
+try {
+fetch('/api/user-info').then(r=>{
+    if(!r.ok){location.href='/login';return;}
+    return r.json();
+}).then(d=>{
+    if(!d)return;
+    document.getElementById('adminUser').textContent=d.username;
+    if(d.role!=='admin') location.href='/';
+}).catch(e=>console.error(e));
+}catch(e){}
+
+function tab(n,btn){
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+    document.getElementById('tab-'+n).classList.add('active');
+    btn.classList.add('active');
+    if(n==='users') loadUsers();
+    if(n==='api'||n==='prompt') loadConfig();
+}
+
+function msg(t,ok){var m=document.getElementById('msg');m.innerHTML='<div class="msg msg-'+(ok?'ok':'err')+'">'+t+'</div>';setTimeout(()=>m.innerHTML='',2000)}
+
+async function loadUsers(){
+    var r=await fetch('/api/admin/users');var d=await r.json();
+    document.getElementById('userList').innerHTML=d.map(u=>
+        `<tr><td>${u.id}</td><td>${u.username}</td><td><span class="tag tag-${u.role}">${u.role}</span></td><td>${u.created_at||''}</td>
+        <td>${u.username!=='admin'?`<button class="btn btn-danger btn-sm" onclick="delUser(${u.id})">删除</button>`:''}</td></tr>`
+    ).join('')}
+}
+
+async function addUser(){
+    var n=document.getElementById('newUser').value.trim(),p=document.getElementById('newPass').value,r=document.getElementById('newRole').value;
+    if(!n||!p)return msg('用户名和密码不能为空');
+    var resp=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:n,password:p,role:r})});
+    if(resp.ok){loadUsers();msg('用户已创建',true);document.getElementById('newUser').value='';document.getElementById('newPass').value=''}else msg('创建失败')}
+async function delUser(id){if(confirm('确认删除?')){await fetch('/api/admin/users/'+id,{method:'DELETE'});loadUsers();msg('已删除',true)}}
+
+async function loadConfig(){
+    var r=await fetch('/api/admin/config');config=await r.json();
+    document.getElementById('apiKey').value=config.deepseek_api_key||'';
+    document.getElementById('apiUrl').value=config.deepseek_base_url||'';
+    document.getElementById('apiModel').value=config.deepseek_model||'';
+    document.getElementById('tpl').value=config.commentary_template||'';
+    document.getElementById('aiPrompt').value=config.ai_query_prompt||'';
+}
+async function saveApi(){
+    config.deepseek_api_key=document.getElementById('apiKey').value;
+    config.deepseek_base_url=document.getElementById('apiUrl').value;
+    config.deepseek_model=document.getElementById('apiModel').value;
+    await fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+    msg('API配置已保存',true)}
+async function savePrompt(){
+    config.commentary_template=document.getElementById('tpl').value;
+    config.ai_query_prompt=document.getElementById('aiPrompt').value;
+    await fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(config)});
+    msg('提示词已保存',true)}
+async function changePw(){
+    var o=document.getElementById('oldPw').value,n=document.getElementById('newPw').value;
+    if(!o||!n)return msg('请填写密码');
+    var r=await fetch('/api/admin/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:o,new_password:n})});
+    if(r.ok)msg('密码已修改',true);else msg('旧密码错误')}
+
+loadUsers();
+</script>
+</body>
+</html>

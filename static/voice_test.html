@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Voice Test</title></head><body>
+<h2>Voice Switch Test</h2>
+<button onclick="test('zh_male_wennuanahu_uranus_bigtts','AI音色')">AI音色</button>
+<button onclick="test('S_2fqs4pf62','志波')">志波</button>
+<button onclick="test('S_1fqs4pf62','锦卉')">锦卉</button>
+<p id="status"></p>
+<audio id="player" controls></audio>
+<script>
+const TEXT = '各位藏友，春风祥玉青花缠枝莲纹马蹄杯，起拍价五千元！';
+async function test(voiceId, label) {
+  const s = document.getElementById('status');
+  s.textContent = `Testing ${label} (${voiceId})...`;
+  const resp = await fetch('/api/tts', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({text: TEXT, voice: voiceId}),
+    cache: 'no-store',
+  });
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  document.getElementById('player').src = url;
+  document.getElementById('player').play();
+  s.textContent = `${label}: HTTP ${resp.status} | ${blob.size} bytes`;
+}
+</script>
+</body></html>

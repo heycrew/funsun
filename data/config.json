@@ -1,0 +1,9 @@
+{
+  "site_title": "FUNSUN拍卖信息聚合系统",
+  "deepseek_api_key": "",
+  "deepseek_base_url": "https://api.deepseek.com/v1",
+  "deepseek_model": "deepseek-chat",
+  "commentary_template": "第[ 序号 ]号拍品，来自[拍品名字]，款识[款识]，年份[年份]，尺寸[尺寸]，容量[容量]，品相[品相]，市场参考价[参考价]",
+  "ai_query_prompt": "请根据拍品信息拍品名字[拍品名字],款识[款识],年份[年份],容量[容量],品相[品相],市场参考价[参考价],在obsidian知识库中查找对应的拍品资料,生成一段专业的拍卖解说稿(解说稿的风格需要参考obsidian中raw文件里面的\"直播口播\"和\"对手口播\")。要求语言生动、有感染力,突出拍品的价值和独特之处。\n\n###限制\n- 直接输出解说稿,禁止输出思考过程和描述问题",
+  "tts_context": "作为瓷器拍卖现场的一名解说,对拍品进行生动的描绘"
+}

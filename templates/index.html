@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拍品信息聚合系统 v3.0</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🔍 拍品信息聚合系统</h1>
+            <p class="subtitle">逐条分析拍品数据，自动生成直播间解说稿</p>
+        </header>
+
+        <!-- 固定飞书链接，隐藏输入框 -->
+        <input type="hidden" id="feishuUrl"
+            value="https://nyl00fatmt.feishu.cn/base/MbecbVJQ5aVQjBsWvGRcbEg6nMg?table=tblR6lIIRP1C5nyW&view=vewb58B32m" />
+
+        <section class="input-section">
+            <div class="input-group" style="justify-content: center;">
+                <button id="analyzeBtn" onclick="startAnalyze()">
+                    <span id="btnText">开始分析</span>
+                    <span id="btnLoading" class="hidden">分析中...</span>
+                </button>
+                <button id="stopBtn" class="stop-btn hidden" onclick="stopAnalyze()">停止分析</button>
+                <a id="adminLink" href="/admin" style="display:none;padding:10px 18px;background:#2c3e50;color:#fff;border-radius:8px;text-decoration:none;font-size:0.9em;font-weight:600;white-space:nowrap">⚙ 管理后台</a>
+            </div>
+        </section>
+
+        <section id="errorSection" class="error-section hidden">
+            <div class="error-card"><span class="error-icon">!</span><span id="errorText"></span></div>
+        </section>
+
+        <section id="progressBar" class="progress-section hidden">
+            <div class="progress-bar"><div class="progress-fill" id="pFill"></div></div>
+            <p class="progress-text" id="pText">准备中...</p>
+        </section>
+
+        <section id="summarySection" class="summary-section hidden">
+            <div class="summary-card">
+                <h2>专场概要</h2>
+                <div class="summary-stats" id="summaryStats"></div>
+                <div class="summary-divider"></div>
+                <div class="summary-kilns">
+                    <h3>窑口分布</h3>
+                    <div id="kilnBars"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="resultSection" class="result-section hidden">
+            <div class="card">
+                <h2 class="card-title">拍品列表 <span class="badge" id="totalBadge">0</span></h2>
+                <div class="table-wrap">
+                    <table class="data-table" id="mainTable">
+                        <thead>
+                            <tr>
+                                <th style="width:30px;padding:8px 4px">#</th>
+                                <th style="width:38%">拍品名字</th>
+                                <th style="width:9em">窑口</th>
+                                <th style="width:9em">款识</th>
+                                <th style="width:7em">起拍价</th>
+                                <th style="width:7em">参考价</th>
+                                <th style="width:80px">状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        let allItems = [];
+        let resultsMap = {};
+        let expandedRow = null;
+        let totalCount = 0;
+        let doneCount = 0;
+        let abortController = null;
+        let audioState = {};
+
+        async function fetchCoverImage(idx, code) {
+            try {
+                const resp = await fetch(`/api/item-cover?code=${encodeURIComponent(code)}`);
+                const json = await resp.json();
+                const area = document.getElementById(`coverArea-${idx}`);
+                if (area && json.images && json.images.length > 0) {
+                    let imgsHtml = '';
+                    json.images.forEach((url, i) => {
+                        imgsHtml += `<img src="${esc(url)}" class=\"cover-img\" onerror=\"this.style.display='none'\" onclick=\"window.open('${esc(url)}')\" title=\"点击查看大图\" />`;
+                    });
+                    area.innerHTML = `<div class=\"cover-gallery\">${imgsHtml}</div>`;
+                } else if (area) {
+                    area.style.display = 'none';
+                }
+            } catch (e) { console.error(e); }
+        }
+
+        function formatTime(sec) {
+            const m = Math.floor(sec / 60);
+            const s = Math.floor(sec % 60);
+            return (m < 10 ? '0' + m : m) + ':' + (s < 10 ? '0' + s : s);
+        }
+
+        async function startAnalyze() {
+            const url = document.getElementById('feishuUrl').value.trim();
+            hideError();
+            document.getElementById('resultSection').classList.add('hidden');
+            showProgress();
+            setAnalyzing(true);
+            allItems = [];
+            resultsMap = {};
+            expandedRow = null;
+            doneCount = 0;
+
+            abortController = new AbortController();
+
+            try {
+                const resp = await fetch(`/api/analyze-all?feishu_url=${encodeURIComponent(url)}`, {
+                    signal: abortController.signal
+                });
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const msg = JSON.parse(line.slice(6));
+                                handleMessage(msg);
+                            } catch (e) {}
+                        }
+                    }
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    // 用户主动停止
+                    updateProgress(0, `已停止 (${doneCount}/${totalCount})`);
+                    setTimeout(() => hideProgress(), 2000);
+                } else {
+                    showError('连接失败: ' + err.message);
+                    hideProgress();
+                }
+            }
+            setAnalyzing(false);
+            abortController = null;
+        }
+
+        function stopAnalyze() {
+            if (abortController) {
+                abortController.abort();
+                abortController = null;
+            }
+            // 将所有"分析中"状态恢复
+            for (let i = 0; i < allItems.length; i++) {
+                if (!resultsMap[i]) {
+                    document.getElementById(`action-${i}`).innerHTML =
+                        '<span class="status-tag pending">等待中</span>';
+                }
+            }
+        }
+
+        function setAnalyzing(active) {
+            document.getElementById('analyzeBtn').classList.toggle('hidden', active);
+            document.getElementById('stopBtn').classList.toggle('hidden', !active);
+        }
+
+        function handleMessage(msg) {
+            switch (msg.type) {
+                case 'start':
+                    totalCount = msg.total;
+                    allItems = msg.items;
+                    document.getElementById('totalBadge').textContent = totalCount;
+                    document.getElementById('resultSection').classList.remove('hidden');
+                    buildTable();
+                    buildSummary(msg.items);
+                    updateProgress(0, msg.cached ? `缓存命中 ${totalCount}条` : `0/${totalCount}`);
+                    break;
+
+                case 'progress':
+                    updateProgress(Math.round((doneCount / totalCount) * 100),
+                        `${doneCount}/${totalCount}`);
+                    setRowStatus(msg.index, 'searching');
+                    break;
+
+                case 'result':
+                    doneCount++;
+                    resultsMap[msg.data.index] = msg.data;
+                    setRowStatus(msg.data.index, 'done');
+                    const label = msg.data._cached ? '缓存' : `${doneCount}/${totalCount}`;
+                    updateProgress(msg.data._cached ? 100 : Math.round((doneCount / totalCount) * 100), label);
+                    // 更新名字颜色
+                    if (msg.data._changed) {
+                        var cell = document.querySelector('#row-' + msg.data.index + ' .name-cell');
+                        if (cell) cell.classList.add('name-changed');
+                    }
+                    if (expandedRow === msg.data.index) {
+                        renderExpandContent(msg.data.index, msg.data);
+                    }
+                    break;
+
+                case 'done':
+                    updateProgress(100, `完成 ${doneCount}/${totalCount}`);
+                    setTimeout(() => hideProgress(), 1500);
+                    break;
+
+                case 'error':
+                    showError(msg.message);
+                    hideProgress();
+                    break;
+            }
+        }
+
+        function buildSummary(items) {
+            var total = items.length;
+            var kilns = {};
+            var totalPrice = 0;
+            items.forEach(function(it) {
+                var k = it.kiln || '未知';
+                kilns[k] = (kilns[k] || 0) + 1;
+                var p = parseFloat(String(it.starting_price || '0').replace(/[^0-9.]/g, ''));
+                if (!isNaN(p)) totalPrice += p;
+            });
+            var uniqueKilns = Object.keys(kilns).length;
+
+            // Stats
+            document.getElementById('summaryStats').innerHTML =
+                '<div class="summary-stat"><span class="val">' + total + '</span><span class="lbl">拍品总数</span></div>' +
+                '<div class="summary-stat"><span class="val">' + uniqueKilns + '</span><span class="lbl">窑口数量</span></div>' +
+                '<div class="summary-stat"><span class="val">¥' + totalPrice.toLocaleString() + '</span><span class="lbl">起拍价总和</span></div>';
+
+            // Kiln bars
+            var kb = '';
+            Object.keys(kilns).sort(function(a,b){return kilns[b]-kilns[a];}).forEach(function(k){
+                var pct = (kilns[k] / total * 100).toFixed(1);
+                kb += '<div class="kiln-row"><span class="kname">' + k + '</span><span class="kbar-wrap"><span class="kbar" style="width:' + pct + '%"></span></span><span class="kinfo">' + kilns[k] + ' 件 · ' + pct + '%</span></div>';
+            });
+            document.getElementById('kilnBars').innerHTML = kb;
+            document.getElementById('summarySection').classList.remove('hidden');
+        }
+
+        function buildTable() {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+            allItems.forEach((item, i) => {
+                const tr = document.createElement('tr');
+                tr.id = `row-${i}`;
+                tr.style.cursor = 'pointer';
+                tr.setAttribute('data-idx', i);
+                tr.onclick = function() { toggleExpand(i); };
+                tr.innerHTML = `
+                    <td>${i + 1}</td>
+                    <td class="name-cell${item._changed ? ' name-changed' : ''}">${esc(item.name || '-')}</td>
+                    <td>${esc(item.kiln || '-')}</td>
+                    <td>${esc(item.inscription || '-')}</td>
+                    <td class="price-cell">${esc(item.starting_price || '-')}</td>
+                    <td class="price-cell">${esc(item.estimate || '-')}</td>
+                    <td class="action-cell" id="action-${i}">
+                        <span class="status-tag pending">等待中</span>
+                    </td>`;
+                tbody.appendChild(tr);
+
+                // 展开行（初始隐藏）
+                const expandTr = document.createElement('tr');
+                expandTr.id = `expand-${i}`;
+                expandTr.className = 'expand-row hidden';
+                expandTr.innerHTML = `<td colspan="7"><div class="expand-content" id="expandContent-${i}"></div></td>`;
+                tbody.appendChild(expandTr);
+            });
+        }
+
+        function setRowStatus(idx, status) {
+            const cell = document.getElementById(`action-${idx}`);
+            if (!cell) return;
+            if (status === 'searching') {
+                cell.innerHTML = '<span class="status-tag searching">分析中</span>';
+            } else if (status === 'done') {
+                let label = (expandedRow === idx) ? '收起' : '展开';
+                let cls = (expandedRow === idx) ? 'expand-btn active' : 'expand-btn';
+                cell.innerHTML = `<button class=\"${cls}\" onclick=\"event.stopPropagation();toggleExpand(${idx})\">${label}</button>`;
+            }
+        }
+
+        function toggleExpand(idx) {
+            const data = resultsMap[idx];
+            if (!data) return;
+
+            if (expandedRow === idx) {
+                // 停止所有音频
+                Object.keys(audioState).forEach(function(k) {
+                    if (audioState[k] && audioState[k].playing) {
+                        audioState[k].audio.pause();
+                        audioState[k].playing = false;
+                    }
+                });
+                // 收起
+                document.getElementById(`expand-${idx}`).classList.add('hidden');
+                document.getElementById(`action-${idx}`).innerHTML =
+                    '<button class="expand-btn" onclick="event.stopPropagation();toggleExpand(' + idx + ')">展开</button>';
+                expandedRow = null;
+            } else {
+                // 收起旧的
+                if (expandedRow !== null) {
+                    document.getElementById(`expand-${expandedRow}`).classList.add('hidden');
+                    const oldData = resultsMap[expandedRow];
+                    if (oldData) {
+                        document.getElementById(`action-${expandedRow}`).innerHTML =
+                            '<button class="expand-btn" onclick="event.stopPropagation();toggleExpand(' + expandedRow + ')">展开</button>';
+                    }
+                }
+                // 停止所有正在播放的音频
+                Object.keys(audioState).forEach(function(k) {
+                    if (audioState[k] && audioState[k].playing) {
+                        audioState[k].audio.pause();
+                        audioState[k].playing = false;
+                    }
+                });
+                // 展开新的
+                renderExpandContent(idx, data);
+                document.getElementById(`expand-${idx}`).classList.remove('hidden');
+                document.getElementById(`action-${idx}`).innerHTML =
+                    '<button class="expand-btn active" onclick="event.stopPropagation();toggleExpand(' + idx + ')">收起</button>';
+                expandedRow = idx;
+                document.getElementById(`expand-${idx}`).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                // 检查并加载缓存的音频
+                loadCachedAudioIfExists(idx, 'template');
+                loadCachedAudioIfExists(idx, 'commentary');
+            }
+        }
+
+        async function refreshCommentary(idx) {
+            const data = resultsMap[idx];
+            if (!data) return;
+            var regenBtn = document.querySelector('#expandContent-' + idx + ' .dual-audio-block:last-child .edit-btn-inline[onclick*=\"refreshCommentary\"]');
+            if (regenBtn) { regenBtn.textContent = '⏳ 生成中...'; regenBtn.disabled = true; }
+            try {
+                const resp = await fetch('/api/refresh/commentary', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        name: data.name || '', kiln: data.kiln || '',
+                        inscription: data.inscription || '', code: data.code || '', index: idx,
+                        starting_price: data.starting_price || '', estimate: data.estimate || '',
+                        era: data.era || '', size: data.size || '', capacity: data.capacity || '',
+                        material: data.material || '', condition: data.condition || '',
+                    }),
+                });
+                const json = await resp.json();
+                if (json.commentary) {
+                    resultsMap[idx].commentary = json.commentary;
+                    var el = document.getElementById('commentaryText-' + idx);
+                    if (el) { el.textContent = json.commentary; el.style.animation = 'none'; el.offsetHeight; el.style.animation = 'fadeIn 0.3s ease'; }
+                }
+                if (json.template_text) {
+                    resultsMap[idx].template_text = json.template_text;
+                    var tel = document.getElementById('tplText-' + idx);
+                    if (tel) tel.textContent = json.template_text;
+                }
+            } catch (err) { console.error(err); }
+            if (regenBtn) { regenBtn.textContent = '🔄 生成文案'; regenBtn.disabled = false; }
+        }
+
+        async function refreshMarket(idx) {
+            const data = resultsMap[idx];
+            if (!data) return;
+            const container = document.getElementById(`expandContent-${idx}`);
+            if (!container) return;
+            const block = container.querySelector('.market-block');
+            const btn = block ? block.querySelector('.refresh-btn') : null;
+            if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+            try {
+                const resp = await fetch('/api/refresh/market', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        name: data.name || '', kiln: data.kiln || '',
+                        starting_price: data.starting_price || '', estimate: data.estimate || '',
+                    }),
+                });
+                const json = await resp.json();
+                if (json.xiaochashu_records) {
+                    resultsMap[idx].xiaochashu_records = json.xiaochashu_records;
+                    resultsMap[idx].market_analysis = json.market_analysis || '';
+                    // 仅更新行情区块DOM
+                    if (json.market_analysis) {
+                        const maEl = block ? block.querySelector('.market-analysis') : null;
+                        if (maEl) maEl.textContent = json.market_analysis;
+                    }
+                    const recordsHtml = renderXiaochashuItems(json.xiaochashu_records);
+                    if (block) {
+                        const oldItems = block.querySelectorAll('.xiaochashu-item, .ref-mini');
+                        oldItems.forEach(el => el.remove());
+                        const anchor = block.querySelector('.market-analysis') || block.querySelector('h4');
+                        if (anchor && recordsHtml) {
+                            anchor.insertAdjacentHTML('afterend', recordsHtml);
+                        }
+                    }
+                    // 更新计数
+                    const countEl = block ? block.querySelector('.count') : null;
+                    if (countEl) countEl.textContent = `(${json.xiaochashu_records.length})`;
+                }
+            } catch (err) { console.error(err); }
+            if (btn) { btn.textContent = '更新'; btn.disabled = false; }
+        }
+
+        function getAudioKey(idx, type) { return type === 'template' ? (idx + '_tpl') : ('' + idx); }
+
+        async function loadCachedAudioIfExists(idx, type) {
+            var key = getAudioKey(idx, type);
+            if (audioState[key] && audioState[key].url) return;
+            var resp = await fetch('/api/cached-audio?index=' + idx + '&audio_type=' + type);
+            if (!resp.ok) return;
+            var blob = await resp.blob();
+            if (blob.size < 500) return;
+            var url = URL.createObjectURL(blob);
+            var audio = new Audio(url);
+            var data = resultsMap[idx] || {};
+            var text = getAudioText(data, type);
+            var rawS = text.split(/[.！？\n]+/).filter(function(s){return s.trim().length>2});
+            var tc = rawS.reduce(function(sum,s){return sum+s.length},0) || 1;
+            var ca = 0;
+            var sts = rawS.map(function(s){var st=ca/tc;ca+=s.length;return{text:s,start:st,end:ca/tc}});
+            var itemName = data.name || ('item'+idx);
+            var dateStr = new Date().toISOString().slice(0,10);
+            var filename = (idx+1)+'_'+itemName+'_'+dateStr+'_'+getAudioLabel(type)+'_缓存.mp3'.replace(/[\\/:*?\"<>|]/g,'_');
+            audioState[key] = {audio:audio, url:url, playing:false, filename:filename, sentenceTimings:sts, type:type, idx:idx};
+            audio.addEventListener('timeupdate', function(){ updateDualProgress(idx,type); });
+            audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); });
+            var prefix = type === 'template' ? 'tpl-' : '';
+            var player = document.getElementById(prefix + 'audioPlayer-' + idx);
+            if (player) { player.style.display = 'flex'; player.innerHTML = '<div class=\"audio-controls\" id=\"' + prefix + 'audioControls-' + idx + '\"></div>'; }
+            var ttsBtn = document.getElementById(prefix + 'ttsBtn-' + idx);
+            if (ttsBtn) ttsBtn.style.display = 'none';
+            renderDualControls(idx, type);
+        }
+
+        function getAudioText(data, type) {
+            if (type === 'template') {
+                // 优先用后端预生成的 template_text，没有则前端拼接
+                if (data && data.template_text) return data.template_text;
+                // 前端根据拍品字段拼接固定话术
+                var d = data || {};
+                var idx = (d.index !== undefined) ? (d.index + 1) : '?';
+                return '第' + idx + '号拍品,来自' + (d.name || '') + ',款识' + (d.inscription || d.kiln || '') + ',年份' + (d.era || '') + ',尺寸' + (d.size || '') + ',容量' + (d.capacity || '') + ',品相' + (d.condition || '') + ',市场参考价' + (d.estimate || '');
+            }
+            return (data && data.commentary) ? data.commentary : '';
+        }
+
+        function getAudioLabel(type) { return type === 'template' ? '固定模板' : 'AI解说稿'; }
+
+        async function generateDualSpeech(idx, type) {
+            var data = resultsMap[idx];
+            var text = getAudioText(data, type);
+            console.log('generateDualSpeech idx=' + idx + ' type=' + type + ' text=' + text.substring(0, 80));
+            if (!text) return;
+            var key = getAudioKey(idx, type);
+            var voiceEl = document.getElementById('voiceSelect-' + idx);
+            var voice = voiceEl ? voiceEl.value : 'zh_male_wennuanahu_uranus_bigtts';
+            var voiceLabel = voiceEl ? voiceEl.options[voiceEl.selectedIndex].text : 'AI音色';
+            var prefix = type === 'template' ? 'tpl-' : '';
+            var ttsBtn = document.getElementById(prefix + 'ttsBtn-' + idx);
+            var player = document.getElementById(prefix + 'audioPlayer-' + idx);
+
+            if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
+            if (ttsBtn) { ttsBtn.textContent = '⏳ 生成中...'; ttsBtn.disabled = true; }
+            if (player) { player.style.display = 'flex'; player.innerHTML = '<span class=\"tts-status\">⏳ ' + getAudioLabel(type) + ' | 火山引擎生成中...</span>'; }
+
+            try {
+                var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type}), cache:'no-store' });
+                if (!resp.ok) throw new Error('TTS failed');
+                var blob = await resp.blob();
+                if (blob.size < 1000) throw new Error('音频太小');
+                var url = URL.createObjectURL(blob) + '#t=' + Date.now();
+                var audio = new Audio(url); audio.load();
+                var itemName = data.name || ('拍品'+idx);
+                var dateStr = new Date().toISOString().slice(0,10);
+                var filename = (idx+1)+'_'+itemName+'_'+dateStr+'_'+voiceLabel+'_'+getAudioLabel(type)+'.mp3'.replace(/[\\/:*?\"<>|]/g,'_');
+                var rawS = text.split(/[.！？\n]+/).filter(function(s){return s.trim().length>2});
+                var tc = rawS.reduce(function(sum,s){return sum+s.length},0);
+                var ca = 0;
+                var sts = rawS.map(function(s){var st=ca/tc;ca+=s.length;return{text:s,start:st,end:ca/tc}});
+                audioState[key] = {audio:audio, url:url, playing:false, filename:filename, sentenceTimings:sts, type:type, idx:idx};
+                audio.addEventListener('timeupdate', function(){ updateDualProgress(idx,type); });
+                audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); });
+                audio.addEventListener('loadedmetadata', function(){ renderDualControls(idx,type); });
+                await new Promise(function(resolve){ audio.addEventListener('canplay', resolve, {once:true}); setTimeout(resolve,5000); });
+                if (player) player.innerHTML = '<div class=\"audio-controls\" id=\"'+prefix+'audioControls-'+idx+'\"></div>';
+                if (ttsBtn) ttsBtn.style.display = 'none';
+                renderDualControls(idx, type);
+                audioState[key].playing = true;
+                audio.play().catch(function(){});
+                renderDualControls(idx, type);
+            } catch(err) {
+                console.error(err);
+                if (player) player.innerHTML = '<span class=\"tts-status\" style=\"color:red\">❌ 生成失败</span>';
+                if (ttsBtn) { ttsBtn.textContent = '🔊 生成语音'; ttsBtn.disabled = false; ttsBtn.style.display = 'block'; }
+            }
+        }
+
+        function renderDualControls(idx, type) {
+            var key = getAudioKey(idx, type); var st = audioState[key]; if (!st) return;
+            var prefix = type === 'template' ? 'tpl-' : '';
+            var container = document.getElementById(prefix + 'audioControls-' + idx);
+            if (!container) return;
+            var dur = st.audio.duration || 0; var cur = st.audio.currentTime || 0;
+            var pct = dur > 0 ? Math.round((cur/dur)*100) : 0;
+            container.innerHTML = '<button class=\"audio-play-btn\" onclick=\"toggleDualAudio(' + idx + ',\'' + type + '\')\">' + (st.playing ? '⏸' : '▶') + '</button>' +
+                '<input type=\"range\" class=\"audio-progress\" value=\"' + pct + '\" min=\"0\" max=\"100\" oninput=\"seekDualAudio(' + idx + ',\'' + type + '\',this.value)\" />' +
+                '<span class=\"audio-time\">' + formatTime(cur) + ' / ' + formatTime(dur) + '</span>' +
+                '<a class=\"audio-download-btn\" href=\"' + st.url + '\" download=\"' + (st.filename||'audio.mp3') + '\" title=\"下载音频\">⬇</a>' +
+                '<button class=\"audio-regen-btn\" onclick=\"generateDualSpeech(' + idx + ',\'' + type + '\')\" title=\"重新生成\">🔄</button>';
+        }
+
+        function updateDualProgress(idx, type) {
+            var key = getAudioKey(idx, type); var st = audioState[key]; if (!st) return;
+            var dur = st.audio.duration || 0; var cur = st.audio.currentTime || 0;
+            var pct = dur > 0 ? Math.round((cur/dur)*100) : 0;
+            var prefix = type === 'template' ? 'tpl-' : '';
+            var slider = document.querySelector('#' + prefix + 'audioControls-' + idx + ' .audio-progress');
+            var timeEl = document.querySelector('#' + prefix + 'audioControls-' + idx + ' .audio-time');
+            if (slider) slider.value = pct;
+            if (timeEl) timeEl.textContent = formatTime(cur) + ' / ' + formatTime(dur);
+            // 字幕：仅AI解说稿有
+            if (type === 'commentary') {
+                var subtitleEl = document.getElementById('subtitle-' + idx);
+                if (subtitleEl && st.sentenceTimings && st.sentenceTimings.length > 0 && dur > 0) {
+                    subtitleEl.style.display = 'block';
+                    var progress = cur / dur;
+                    var found = st.sentenceTimings[0].text;
+                    for (var i = 0; i < st.sentenceTimings.length; i++) {
+                        var t = st.sentenceTimings[i];
+                        if (progress >= t.start && progress < t.end) { found = t.text; break; }
+                        if (progress >= t.end) found = t.text;
+                    }
+                    subtitleEl.innerHTML = '<span class=\"sub-active\">' + esc(found) + '</span>';
+                }
+            }
+        }
+
+        function toggleDualAudio(idx, type) {
+            var key = getAudioKey(idx, type); var st = audioState[key]; if (!st) return;
+            if (st.playing) { st.audio.pause(); st.playing = false; }
+            else {
+                Object.keys(audioState).forEach(function(k){ if(k!=key&&audioState[k]&&audioState[k].playing){audioState[k].audio.pause();audioState[k].playing=false;renderDualControls(audioState[k].idx,audioState[k].type);} });
+                st.audio.play(); st.playing = true;
+            }
+            renderDualControls(idx, type);
+        }
+
+        function seekDualAudio(idx, type, pct) {
+            var key = getAudioKey(idx, type); var st = audioState[key];
+            if (!st || !st.audio.duration) return;
+            st.audio.currentTime = (pct / 100) * st.audio.duration;
+        }
+
+        async function regenTemplateText(idx) {
+            var btn = document.querySelector('#expandContent-' + idx + ' .dual-audio-block:first-child .edit-btn-inline[onclick*=\"regenTemplateText\"]');
+            if (btn) { btn.textContent = '⏳ 生成中...'; btn.disabled = true; }
+            // 重新从数据生成固定介绍文案
+            var newText = getAudioText(resultsMap[idx], 'template');
+            if (resultsMap[idx]) resultsMap[idx].template_text = newText;
+            var textEl = document.getElementById('tplText-' + idx);
+            if (textEl) textEl.textContent = newText || '';
+            // 重置音频
+            var key = idx + '_tpl';
+            if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
+            var p = document.getElementById('tpl-audioPlayer-' + idx); if (p) p.style.display = 'none';
+            var b = document.getElementById('tpl-ttsBtn-' + idx);
+            if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
+            if (btn) { btn.textContent = '🔄 生成文案'; btn.disabled = false; }
+        }
+
+        async function editTemplateText(idx) {
+            var textEl = document.getElementById('tplText-' + idx);
+            var editEl = document.getElementById('tplEdit-' + idx);
+            var saveBtn = document.getElementById('tpl-saveBtn-' + idx);
+            var editBtn = document.getElementById('tpl-editBtn-' + idx);
+            var isEditing = !editEl.classList.contains('hidden');
+            if (isEditing) {
+                var newText = editEl.value.trim();
+                if (newText) {
+                    if (resultsMap[idx]) resultsMap[idx].template_text = newText;
+                    textEl.textContent = newText;
+                }
+                editEl.classList.add('hidden'); saveBtn.classList.add('hidden');
+                textEl.classList.remove('hidden');
+                if (editBtn) editBtn.textContent = '✎';
+                // 重置模板音频
+                var key = idx + '_tpl';
+                if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
+                var p = document.getElementById('tpl-audioPlayer-' + idx); if (p) p.style.display = 'none';
+                var b = document.getElementById('tpl-ttsBtn-' + idx);
+                if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
+            } else {
+                editEl.value = (resultsMap[idx] && resultsMap[idx].template_text) || getAudioText(resultsMap[idx], 'template');
+                editEl.classList.remove('hidden'); saveBtn.classList.remove('hidden');
+                textEl.classList.add('hidden');
+                if (editBtn) editBtn.textContent = '取消';
+            }
+        }
+
+        async function editCommentary(idx) {
+            const textEl = document.getElementById(`commentaryText-${idx}`);
+            const editEl = document.getElementById(`commentaryEdit-${idx}`);
+            const saveBtn = document.getElementById(`saveBtn-${idx}`);
+            const editBtn = document.getElementById(`editBtn-${idx}`);
+            const data = resultsMap[idx];
+
+            if (!textEl || !editEl) return;
+
+            const isEditing = !editEl.classList.contains('hidden');
+            if (isEditing) {
+                // 保存
+                const newText = editEl.value.trim();
+                if (newText) {
+                    resultsMap[idx].commentary = newText;
+                    textEl.textContent = newText;
+                    // 同步更新缓存快照
+                    fetch('/api/cache/update-commentary', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,commentary:newText})}).catch(function(){});
+                }
+                editEl.classList.add('hidden');
+                saveBtn.classList.add('hidden');
+                textEl.classList.remove('hidden');
+                if (editBtn) editBtn.textContent = '编辑';
+                // 重置双音频状态
+                ['', 'tpl-'].forEach(function(pref){
+                    var key = pref === 'tpl-' ? (idx + '_tpl') : ('' + idx);
+                    if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
+                    var p = document.getElementById(pref + 'audioPlayer-' + idx); if (p) p.style.display = 'none';
+                    var b = document.getElementById(pref + 'ttsBtn-' + idx);
+                    if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
+                });
+            } else {
+                // 进入编辑模式
+                editEl.value = data.commentary || '';
+                editEl.classList.remove('hidden');
+                saveBtn.classList.remove('hidden');
+                textEl.classList.add('hidden');
+                if (editBtn) editBtn.textContent = '取消';
+            }
+        }
+
+        function renderExpandContent(idx, data) {
+            const container = document.getElementById(`expandContent-${idx}`);
+            let html = '';
+
+            // === 封面图 ===
+            if (data.code) {
+                html += `<div class="cover-area" id="coverArea-${idx}">
+                    <span class="cover-loading">📷 加载封面中...</span>
+                </div>`;
+                // 异步加载封面
+                fetchCoverImage(idx, data.code);
+            }
+
+            // === 解说稿 ===
+            if (data.commentary) {
+                html += `<div class="expand-block commentary-block">
+                    <h4>解说稿</h4>
+                    <!-- 音色选择 -->
+                    <div class="tts-toolbar">
+                        <select class="voice-select" id="voiceSelect-${idx}">
+                            <option value="zh_male_wennuanahu_uranus_bigtts">AI音色(系统)</option>
+                            <option value="S_2fqs4pf62">志波(复刻)</option>
+                            <option value="S_1fqs4pf62">锦卉(复刻)</option>
+                            <option value="S_0fqs4pf62">杨雪(复刻)</option>
+                            <option value="S_Zeqs4pf62">培文(复刻)</option>
+                        </select>
+                    </div>
+                    <!-- 固定介绍（固定话术） -->
+                    <div class="dual-audio-block">
+                        <div class="dual-label">📋 固定介绍
+                            <button class="edit-btn-inline" id="tpl-editBtn-${idx}" onclick="editTemplateText(${idx})" title="编辑">✎</button>
+                            <button class="edit-btn-inline" style="float:right" onclick="regenTemplateText(${idx})" title="重新生成固定介绍文案">🔄 生成文案</button>
+                        </div>
+                        <div class="tpl-text" id="tplText-${idx}">${esc(data.template_text || getAudioText(data,'template'))}</div>
+                        <textarea class="commentary-edit hidden" id="tplEdit-${idx}" rows="3"></textarea>
+                        <button class="save-btn hidden" id="tpl-saveBtn-${idx}" onclick="editTemplateText(${idx})">💾 保存</button>
+                        <button class="tts-btn" id="tpl-ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'template')">🔊 生成语音</button>
+                        <div class="audio-player" id="tpl-audioPlayer-${idx}" style="display:none">
+                            <div class="audio-controls" id="tpl-audioControls-${idx}"></div>
+                        </div>
+                    </div>
+                    <!-- 拍品亮点（AI解说稿） -->
+                    <div class="dual-audio-block">
+                        <div class="dual-label">🎙️ 拍品亮点
+                            <button class="edit-btn-inline" id="editBtn-${idx}" onclick="editCommentary(${idx})" title="编辑">✎</button>
+                            <button class="edit-btn-inline" style="float:right" onclick="refreshCommentary(${idx})" title="重新生成亮点文案">🔄 生成文案</button>
+                        </div>
+                        <div class="commentary-text" id="commentaryText-${idx}">${esc(data.commentary)}</div>
+                        <textarea class="commentary-edit hidden" id="commentaryEdit-${idx}" rows="5"></textarea>
+                        <button class="save-btn hidden" id="saveBtn-${idx}" onclick="editCommentary(${idx})">💾 保存</button>
+                        <button class="tts-btn" id="ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'commentary')">🔊 生成语音</button>
+                        <div class="audio-player" id="audioPlayer-${idx}" style="display:none">
+                            <div class="audio-controls" id="audioControls-${idx}"></div>
+                        </div>
+                        <div class="subtitle-area" id="subtitle-${idx}" style="display:none"></div>
+                    </div>
+                </div>`;
+            }
+
+            // === 成交行情（Obsidian CSV） ===
+            html += '<div class="expand-block market-block"><h4>成交行情';
+            html += ` <button class="refresh-btn" onclick="refreshMarket(${idx})" title="重新查询成交行情">更新</button>`;
+            if (data.xiaochashu_records && data.xiaochashu_records.length > 0) {
+                html += ` <span class="count">(${data.xiaochashu_records.length})</span>`;
+            }
+            html += '</h4>';
+            if (data.market_analysis) {
+                html += `<div class="market-analysis">${esc(data.market_analysis)}</div>`;
+            }
+            html += renderXiaochashuItems(data.xiaochashu_records);
+            html += '</div>';
+
+            container.innerHTML = html || '<p class="empty-text">暂无参考资料</p>';
+        }
+
+        function renderXiaochashuItems(records) {
+            if (!records || records.length === 0) return '<p class="empty-text">暂无成交行情记录</p>';
+            let html = '';
+            for (const r of records.slice(0, 10)) {
+                html += `<div class="ref-mini xiaochashu-item">
+                    ${r.image ? `<img src="${esc(r.image)}" class="xc-thumb" onerror="this.style.display='none'" />` : ''}
+                    <div class="ref-mini-content">
+                        <div class="ref-mini-title">${esc(r.name || '')}</div>
+                        <div class="ref-mini-meta">
+                            <span class="xc-price">起拍: ${esc(r.starting_price || '-')}</span>
+                            <span class="xc-deal">成交: ${esc(r.deal_price || '-')}</span>
+                            <span class="xc-time">${esc(r.auction_time || '')}</span>
+                            <span class="xc-source">${esc(r.source || '')}</span>
+                            <span class="xc-status ${r.status === '隐藏' ? 'hidden-status' : 'show-status'}">${esc(r.status || '')}</span>
+                        </div>
+                    </div>
+                    <a href="https://manage.funsun.cn/admin/newquotationdealinfo/?flt1_1=${esc(r.id || '')}" target="_blank" class="source-link mini">查看原文</a>
+                </div>`;
+            }
+            return html;
+        }
+
+        function renderRefItems(items, badgeType) {
+            if (!items || items.length === 0) return '<p class="empty-text">暂无数据</p>';
+            const badgeClass = 'obsidian-badge';
+            const badgeText = 'Obsidian';
+
+            let html = '';
+            for (const r of items.slice(0, 5)) {
+                const snippet = r.snippet || '';
+                const price = r.price || '';
+                const image = r.image || '';
+                const source = r.source || '';
+                const fileUrl = r.file_url || '';
+                html += `<div class="ref-mini">
+                    <span class="type-badge mini ${badgeClass}">${badgeText}</span>
+                    ${image ? `<img src="${esc(image)}" class="xc-thumb" onerror="this.style.display='none'" />` : ''}
+                    <div class="ref-mini-content">
+                        <div class="ref-mini-title">${esc(r.title || '')}</div>
+                        ${source && badgeType === 'obsidian' ? `<div class="ref-mini-source obsidian-source">${esc(source)}</div>` : ''}`;
+                if (price) {
+                    html += `<div class="ref-mini-price">${esc(price)} | ${esc(r.condition || '')} | ${esc(r.location || '')}`;
+                    if (r.seller) html += ` | ${esc(r.seller)}`;
+                    html += `</div>`;
+                }
+                if (snippet) {
+                    html += `<div class="ref-mini-snippet">${esc(snippet).substring(0, 200)}</div>`;
+                }
+                if (r.match_type) {
+                    const typeLabel = {kiln_vessel:'器型匹配', kiln_motif:'纹饰匹配', kiln_craft:'工艺匹配', kiln:'窑口', kiln_analysis:'窑口分析'}[r.match_type] || '';
+                    if (typeLabel) html += `<span class="match-tag">${typeLabel}</span>`;
+                }
+                html += `</div>
+                    ${badgeType !== 'obsidian' ? `<a href="${esc(r.url || '#')}" target="_blank" class="source-link mini">查看原文</a>` : ''}
+                </div>`;
+            }
+            return html;
+        }
+
+        function showError(msg) {
+            document.getElementById('errorText').textContent = msg;
+            document.getElementById('errorSection').classList.remove('hidden');
+        }
+        function hideError() { document.getElementById('errorSection').classList.add('hidden'); }
+        function showProgress() { document.getElementById('progressBar').classList.remove('hidden'); }
+        function hideProgress() { document.getElementById('progressBar').classList.add('hidden'); }
+        function updateProgress(pct, text) {
+            document.getElementById('pFill').style.width = pct + '%';
+            document.getElementById('pText').textContent = text;
+        }
+        function disableBtn(d) {
+            const btn = document.getElementById('analyzeBtn');
+            btn.disabled = d;
+            document.getElementById('btnText').classList.toggle('hidden', d);
+            document.getElementById('btnLoading').classList.toggle('hidden', !d);
+        }
+        function esc(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+        fetch('/api/user-info').then(r=>r.json()).then(d=>{
+            if(d.role==='admin') document.getElementById('adminLink').style.display='inline';
+        });
+    </script>
+</body>
+</html>

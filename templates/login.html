@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - FUNSUN拍卖信息聚合系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh; display: flex; align-items: center; justify-content: center;
+        }
+        .login-box {
+            background: #fff; padding: 40px; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 380px; max-width: 90vw;
+        }
+        .login-box h1 { text-align: center; font-size: 1.3em; color: #333; margin-bottom: 8px; }
+        .login-box .sub { text-align: center; color: #999; font-size: 0.85em; margin-bottom: 30px; }
+        .login-box input {
+            width: 100%; padding: 12px 14px; margin-bottom: 16px;
+            border: 2px solid #e0e4e8; border-radius: 8px; font-size: 0.95em;
+            outline: none; transition: border-color 0.2s;
+        }
+        .login-box input:focus { border-color: #667eea; }
+        .login-box button {
+            width: 100%; padding: 12px; background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff; border: none; border-radius: 8px; font-size: 1em;
+            font-weight: 600; cursor: pointer; transition: opacity 0.2s;
+        }
+        .login-box button:hover { opacity: 0.9; }
+        .error { color: #e74c3c; text-align: center; margin-top: 10px; font-size: 0.85em; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>FUNSUN拍卖信息聚合系统</h1>
+        <p class="sub">请登录后使用</p>
+        <form method="post" action="/api/login">
+            <input type="text" name="username" placeholder="用户名" required autocomplete="off">
+            <input type="password" name="password" placeholder="密码" required>
+            <button type="submit">登 录</button>
+            {% if error %}
+            <p class="error">{{ error }}</p>
+            {% endif %}
+        </form>
+    </div>
+</body>
+</html>

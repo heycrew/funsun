@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+playwright
+pydantic
+jinja2
+python-multipart
+aiofiles

@@ -1,0 +1,5 @@
+.env
+cache/
+funsun_state.json
+__pycache__/
+*.pyc

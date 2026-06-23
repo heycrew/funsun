@@ -1,0 +1,107 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>
+        
+            login -
+            小茶书后台管理系统
+        
+    </title>
+    
+        <meta charset="UTF-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="description" content="">
+        <meta name="author" content="">
+    
+    
+        <link href="/admin/static/bootstrap/bootstrap3/swatch/cerulean/bootstrap.min.css?v=3.3.5"
+              rel="stylesheet">
+        
+        <link href="/admin/static/admin/css/bootstrap3/admin.css?v=1.1.1" rel="stylesheet">
+        <link href="/admin/static/admin/css/bootstrap3/submenu.css" rel="stylesheet">
+        <style>
+            body {
+                padding-top: 40px;
+                padding-bottom: 40px;
+                background-color: #eee;
+            }
+
+            .form-signin {
+                max-width: 330px;
+                padding: 15px;
+                margin: 0 auto;
+            }
+
+            .form-signin .form-signin-heading,
+            .form-signin .checkbox {
+                margin-bottom: 10px;
+            }
+
+            .form-signin .checkbox {
+                font-weight: normal;
+            }
+
+            .form-signin .form-control {
+                position: relative;
+                height: auto;
+                -webkit-box-sizing: border-box;
+                -moz-box-sizing: border-box;
+                box-sizing: border-box;
+                padding: 10px;
+                font-size: 16px;
+            }
+
+            .form-signin .form-control:focus {
+                z-index: 2;
+            }
+
+            .form-signin input[type="email"] {
+                margin-bottom: -1px;
+                border-bottom-right-radius: 0;
+                border-bottom-left-radius: 0;
+            }
+
+            .form-signin input[type="password"] {
+                margin-bottom: 10px;
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+            }
+        </style>
+    
+</head>
+<body>
+<div class="container">
+
+    <form class="form-signin" action="/login/" method="post">
+        <h2 class="form-signin-heading">请登录</h2>
+        
+        <label for="email" class="sr-only">邮箱</label>
+        <input type="email" id="email" name="email" value="" class="form-control"
+               placeholder='邮箱' required autofocus>
+        <label for="password" class="sr-only">密码</label>
+        <input type="password" id="password" name='password' class="form-control"
+               placeholder='密码' value="" required>
+        <div class="checkbox">
+            <label>
+                <input type="checkbox" value="y"
+                       name="remember"> 记住密码
+            </label>
+        </div>
+        
+            <input id="csrf_token" name="csrf_token" type="hidden" value="20260618161057##83d0299df336f8bb9de3c14e47cf9191249d4b1f">
+        
+        <button class="btn btn-lg btn-primary btn-block" type="submit">登录</button>
+    </form>
+</div> <!-- /container -->
+
+    <script src="/admin/static/vendor/jquery.min.js?v=2.1.4" type="text/javascript"></script>
+    <script src="/admin/static/bootstrap/bootstrap3/js/bootstrap.min.js?v=3.3.5"
+            type="text/javascript"></script>
+    <script src="/admin/static/vendor/moment.min.js?v=2.9.0" type="text/javascript"></script>
+    <script src="/admin/static/vendor/select2/select2.min.js?v=3.5.2"
+            type="text/javascript"></script>
+
+</body>
+</html>
