@@ -98,6 +98,44 @@
             } catch (e) { console.error(e); }
         }
 
+        async function loadMarketCovers(records) {
+            if (!records || records.length === 0) return;
+            // 先检查是否有缓存封面
+            var hasAllCached = true;
+            var missingIds = [];
+            for (var i = 0; i < Math.min(records.length, 10); i++) {
+                var r = records[i];
+                if (r._cover_image) {
+                    var el = document.getElementById('xc-thumb-' + r.id);
+                    if (el) el.innerHTML = '<img src=\"' + esc(r._cover_image) + '\" class=\"xc-thumb\" onerror=\"this.style.display=\\\'none\\\'\" />';
+                } else {
+                    hasAllCached = false;
+                    if (r.id) missingIds.push(r.id);
+                }
+            }
+            if (hasAllCached || missingIds.length === 0) return;
+            // 获取缺失的封面
+            try {
+                var resp = await fetch('/api/batch-covers?codes=' + encodeURIComponent(missingIds.join(',')));
+                var data = await resp.json();
+                var covers = data.covers || {};
+                for (var cid in covers) {
+                    var el = document.getElementById('xc-thumb-' + cid);
+                    if (el && covers[cid]) {
+                        el.innerHTML = '<img src=\"' + esc(covers[cid]) + '\" class=\"xc-thumb\" onerror=\"this.style.display=\\\'none\\\'\" />';
+                        // 缓存到 record
+                        for (var j = 0; j < records.length; j++) {
+                            if (records[j].id == cid) { records[j]._cover_image = covers[cid]; break; }
+                        }
+                    }
+                }
+                // 回写缓存（异步，不阻塞）
+                if (Object.keys(covers).length > 0) {
+                    fetch('/api/cache/update-covers', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({covers:covers})}).catch(function(){});
+                }
+            } catch(e) { console.error(e); }
+        }
+
         function formatTime(sec) {
             const m = Math.floor(sec / 60);
             const s = Math.floor(sec % 60);
@@ -339,7 +377,13 @@
         async function refreshCommentary(idx) {
             const data = resultsMap[idx];
             if (!data) return;
-            var regenBtn = document.querySelector('#expandContent-' + idx + ' .dual-audio-block:last-child .edit-btn-inline[onclick*=\"refreshCommentary\"]');
+            var allBtns2 = document.querySelectorAll('#expandContent-' + idx + ' .edit-btn-inline');
+            var regenBtn = null;
+            for (var i = 0; i < allBtns2.length; i++) {
+                if (allBtns2[i].getAttribute('onclick') && allBtns2[i].getAttribute('onclick').indexOf('refreshCommentary') >= 0) {
+                    regenBtn = allBtns2[i]; break;
+                }
+            }
             if (regenBtn) { regenBtn.textContent = '⏳ 生成中...'; regenBtn.disabled = true; }
             try {
                 const resp = await fetch('/api/refresh/commentary', {
@@ -359,11 +403,7 @@
                     var el = document.getElementById('commentaryText-' + idx);
                     if (el) { el.textContent = json.commentary; el.style.animation = 'none'; el.offsetHeight; el.style.animation = 'fadeIn 0.3s ease'; }
                 }
-                if (json.template_text) {
-                    resultsMap[idx].template_text = json.template_text;
-                    var tel = document.getElementById('tplText-' + idx);
-                    if (tel) tel.textContent = json.template_text;
-                }
+                // template_text 更新由 regenTemplateText 单独处理，refreshCommentary 不碰固定介绍
             } catch (err) { console.error(err); }
             if (regenBtn) { regenBtn.textContent = '🔄 生成文案'; regenBtn.disabled = false; }
         }
@@ -562,13 +602,44 @@
         }
 
         async function regenTemplateText(idx) {
-            var btn = document.querySelector('#expandContent-' + idx + ' .dual-audio-block:first-child .edit-btn-inline[onclick*=\"regenTemplateText\"]');
+            var allBtns = document.querySelectorAll('#expandContent-' + idx + ' .edit-btn-inline');
+            var btn = null;
+            for (var i = 0; i < allBtns.length; i++) {
+                if (allBtns[i].getAttribute('onclick') && allBtns[i].getAttribute('onclick').indexOf('regenTemplateText') >= 0) {
+                    btn = allBtns[i]; break;
+                }
+            }
             if (btn) { btn.textContent = '⏳ 生成中...'; btn.disabled = true; }
-            // 重新从数据生成固定介绍文案
-            var newText = getAudioText(resultsMap[idx], 'template');
-            if (resultsMap[idx]) resultsMap[idx].template_text = newText;
-            var textEl = document.getElementById('tplText-' + idx);
-            if (textEl) textEl.textContent = newText || '';
+            var data = resultsMap[idx];
+            if (data) {
+                // 先获取最新模板配置
+                try {
+                    var cfgResp = await fetch('/api/admin/config');
+                    var cfg = await cfgResp.json();
+                    var tpl = cfg.commentary_template || '';
+                    // 用模板 + 数据渲染
+                    var d = data;
+                    var num = (d.index !== undefined) ? (d.index + 1) : '?';
+                    var fresh = tpl
+                        .replace(/\[序号\]/g, num)
+                        .replace(/\[拍品名字\]/g, d.name || '')
+                        .replace(/\[款识\]/g, d.inscription || d.kiln || '')
+                        .replace(/\[窑口\]/g, d.kiln || '')
+                        .replace(/\[年份\]/g, d.era || '')
+                        .replace(/\[年代\]/g, d.era || '')
+                        .replace(/\[尺寸\]/g, d.size || '')
+                        .replace(/\[容量\]/g, d.capacity || '')
+                        .replace(/\[品相\]/g, d.condition || '')
+                        .replace(/\[参考价\]/g, d.estimate || '')
+                        .replace(/\[起拍价\]/g, d.starting_price || '')
+                        .replace(/\[材质\]/g, d.material || '')
+                        .replace(/\[市场参考价\]/g, d.estimate || '');
+                    data.template_text = fresh;
+                    var textEl = document.getElementById('tplText-' + idx);
+                    if (textEl) textEl.textContent = fresh;
+                    fetch('/api/cache/update-commentary', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,commentary:data.commentary,template_text:fresh})}).catch(function(){});
+                } catch(e) { console.error(e); }
+            }
             // 重置音频
             var key = idx + '_tpl';
             if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
@@ -721,6 +792,10 @@
             html += '</div>';
 
             container.innerHTML = html || '<p class="empty-text">暂无参考资料</p>';
+            // 异步加载成交行情封面
+            if (data.xiaochashu_records && data.xiaochashu_records.length > 0) {
+                setTimeout(function(){ loadMarketCovers(data.xiaochashu_records); }, 500);
+            }
         }
 
         function renderXiaochashuItems(records) {
@@ -728,7 +803,9 @@
             let html = '';
             for (const r of records.slice(0, 10)) {
                 html += `<div class="ref-mini xiaochashu-item">
-                    ${r.image ? `<img src="${esc(r.image)}" class="xc-thumb" onerror="this.style.display='none'" />` : ''}
+                    <div class="xc-thumb-wrap" id="xc-thumb-${r.id || ''}">
+                        <span class="xc-thumb-loading">📷</span>
+                    </div>
                     <div class="ref-mini-content">
                         <div class="ref-mini-title">${esc(r.name || '')}</div>
                         <div class="ref-mini-meta">

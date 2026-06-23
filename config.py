@@ -17,9 +17,9 @@ USER_AGENT = (
 )
 
 # Obsidian vault 配置
-OBSIDIAN_VAULT_PATH = r"D:\WorkDoc\当代茶艺瓷器"   # Obsidian vault 根目录
-OBSIDIAN_VAULT_NAME = "当代茶艺瓷器"               # vault 名称（用于 obsidian:// 链接）
-OBSIDIAN_MARKET_CSV = "raw/数据/成交行情.csv"       # 成交行情 CSV（相对于 vault 根目录）
+OBSIDIAN_VAULT_PATH = os.getenv("OBSIDIAN_VAULT_PATH", r"D:\WorkDoc\当代茶艺瓷器")
+OBSIDIAN_VAULT_NAME = os.getenv("OBSIDIAN_VAULT_NAME", "当代茶艺瓷器")
+OBSIDIAN_MARKET_CSV = os.getenv("OBSIDIAN_MARKET_CSV", "raw/数据/成交行情.csv")
 
 # 搜索配置
 OBSIDIAN_SEARCH_MAX_RESULTS = 5   # Obsidian 搜索每轮最大结果数

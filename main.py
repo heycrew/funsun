@@ -27,7 +27,7 @@ from modules.feishu_api import read_feishu_bitable
 from modules.obsidian_knowledge import search_item_intros_by_type
 from modules.obsidian_market import search_auction_records, generate_market_analysis
 from modules.commentary_ai import generate_commentary_ai_direct, _gather_obsidian_context
-from modules.funsun_cover import fetch_product_images
+from modules.funsun_cover import fetch_product_images, fetch_deal_covers_batch
 from modules.snapshot_cache import (compute_fingerprint, load_snapshot, save_snapshot,
                                      save_audio, get_audio, has_audio, acquire_lock, release_lock,
                                      update_item_in_snapshot)
@@ -419,6 +419,16 @@ async def item_cover(code: str = Query(...)):
     return {"code": code, "images": images}
 
 
+@app.get("/api/batch-covers")
+async def batch_covers(codes: str = Query(...)):
+    """批量获取拍品封面图（每个ID只取第一张）"""
+    ids = [c.strip() for c in codes.split(",") if c.strip()]
+    if not ids:
+        return {"covers": {}}
+    result = await fetch_deal_covers_batch(ids[:20])
+    return {"covers": result}
+
+
 class RefreshItemRequest(BaseModel):
     name: str = ""
     kiln: str = ""
@@ -455,7 +465,16 @@ async def text_to_speech(req: TTSRequest):
     resource_id = "seed-icl-2.0" if voice.startswith("S_") else config.VOLCANO_TTS_RESOURCE_ID
     cfg = _load_config()
     tts_ctx = cfg.get("tts_context") or config.VOLCANO_TTS_CONTEXT
-    logger.info(f"TTS请求: voice={voice} resource={resource_id} text_len={len(req.text)}")
+
+    # 发音词典：直接替换为同音字（比 SSML phoneme 更可靠）
+    text = req.text
+    pron_dict = cfg.get("pronunciation_dict", {})
+    if pron_dict:
+        for word, replacement in pron_dict.items():
+            if word in text and replacement:
+                text = text.replace(word, replacement)
+
+    logger.info(f"TTS请求: voice={voice} resource={resource_id} text_len={len(text)}")
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -470,7 +489,7 @@ async def text_to_speech(req: TTSRequest):
                 json={
                     "user": {"uid": "auction_user"},
                     "req_params": {
-                        "text": req.text,
+                        "text": text,
                         "speaker": voice,
                         "audio_params": {"format": "mp3", "sample_rate": 24000},
                         "additions": json.dumps({"context_texts": tts_ctx}) if tts_ctx else None,
@@ -549,8 +568,25 @@ async def cache_update_commentary(request: Request):
     body = await request.json()
     idx = body.get("index", -1)
     commentary = body.get("commentary", "")
-    if idx >= 0 and commentary:
-        update_item_in_snapshot(idx, commentary=commentary)
+    template_text = body.get("template_text", "")
+    if idx >= 0 and (commentary or template_text):
+        kwargs = {}
+        if commentary: kwargs["commentary"] = commentary
+        if template_text: kwargs["template_text"] = template_text
+        if kwargs:
+            update_item_in_snapshot(idx, **kwargs)
+            return {"ok": True}
+    return {"ok": False}
+
+
+@app.post("/api/cache/update-covers")
+async def cache_update_covers(request: Request):
+    """批量更新行情记录封面图到缓存"""
+    from modules.snapshot_cache import update_market_covers
+    body = await request.json()
+    covers = body.get("covers", {})
+    if covers:
+        update_market_covers(covers)
         return {"ok": True}
     return {"ok": False}
 

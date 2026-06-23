@@ -85,6 +85,23 @@ def delete_audio_for_code(code: str):
             break
 
 
+def update_market_covers(covers: dict[str, str]):
+    """批量更新行情记录封面图 URL 到快照"""
+    snap = load_snapshot()
+    if not snap or "items" not in snap:
+        return
+    changed = False
+    for item in snap["items"]:
+        for rec in item.get("xiaochashu_records", []):
+            rid = rec.get("id", "")
+            if rid in covers and covers[rid]:
+                rec["_cover_image"] = covers[rid]
+                changed = True
+    if changed:
+        save_snapshot(snap["items"], snap.get("fingerprint", ""))
+        logger.info(f"封面图缓存已更新: {len(covers)} 条")
+
+
 def clear_all_audio():
     """清空全部音频文件"""
     for f in AUDIO_DIR.glob("*.mp3"):
@@ -133,8 +150,8 @@ def release_lock():
         LOCK_FILE.unlink()
 
 
-def update_item_in_snapshot(index: int, commentary: str = None, market_analysis: str = None):
-    """更新快照中单条拍品的数据（解说稿或行情分析）"""
+def update_item_in_snapshot(index: int, commentary: str = None, market_analysis: str = None, template_text: str = None):
+    """更新快照中单条拍品的数据"""
     snap = load_snapshot()
     if not snap or "items" not in snap:
         return
@@ -144,6 +161,8 @@ def update_item_in_snapshot(index: int, commentary: str = None, market_analysis:
                 item["commentary"] = commentary
             if market_analysis is not None:
                 item["market_analysis"] = market_analysis
+            if template_text is not None:
+                item["template_text"] = template_text
             break
     save_snapshot(snap["items"], snap.get("fingerprint", ""))
     logger.info(f"快照已更新: index={index}")

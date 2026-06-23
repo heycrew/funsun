@@ -14,6 +14,7 @@ FUNSUN_EMAIL = os.getenv("FUNSUN_EMAIL")
 FUNSUN_PASSWORD = os.getenv("FUNSUN_PASSWORD")
 LOGIN_URL = "https://manage.funsun.cn/login/"
 DETAIL_URL = "https://manage.funsun.cn/admin/v320sendproductinfo/edit/?id={code}"
+DEAL_SEARCH_URL = "https://manage.funsun.cn/admin/newquotationdealinfo/?flt1_1={record_id}"
 STATE_PATH = os.path.join(os.path.dirname(__file__), "..", "funsun_state.json")
 
 _ctx = None  # 持久化登录上下文
@@ -137,6 +138,62 @@ async def fetch_product_images(code: str) -> list[str]:
     except Exception as e:
         logger.error(f"拍品图获取失败 code={code}: {e}")
         return []
+
+
+async def fetch_deal_cover(record_id: str) -> str:
+    """从成交行情搜索结果页获取单条记录的封面图"""
+    if not record_id:
+        return ""
+    ctx = await _get_context()
+    if ctx is None:
+        return ""
+    url = DEAL_SEARCH_URL.format(record_id=record_id)
+    try:
+        page = await ctx.new_page()
+        page.set_default_timeout(15000)
+        await page.goto(url, wait_until="domcontentloaded")
+        await asyncio.sleep(2)
+        html = await page.content()
+        await page.close()
+        imgs = re.findall(r'<img[^>]+src="([^"]+)"', html)
+        for img in imgs:
+            if 'funsun.cn' in img and len(img) > 50:
+                logger.info(f"行情封面 record_id={record_id}: {img[:100]}")
+                return img
+        return ""
+    except Exception as e:
+        logger.error(f"行情封面获取失败 record_id={record_id}: {e}")
+        return ""
+
+
+async def fetch_deal_covers_batch(record_ids: list[str]) -> dict[str, str]:
+    """批量获取行情记录封面图（复用同一个 Page，大幅提速）"""
+    if not record_ids:
+        return {}
+    ctx = await _get_context()
+    if ctx is None:
+        return {}
+    results = {}
+    page = await ctx.new_page()
+    page.set_default_timeout(15000)
+    try:
+        for rid in record_ids[:20]:
+            if not rid: continue
+            try:
+                await page.goto(DEAL_SEARCH_URL.format(record_id=rid), wait_until="domcontentloaded")
+                await asyncio.sleep(1)
+                html = await page.content()
+                imgs = re.findall(r'<img[^>]+src="([^"]+)"', html)
+                for img in imgs:
+                    if 'funsun.cn' in img and len(img) > 50:
+                        results[rid] = img
+                        logger.info(f"行情封面 {rid}: {img[:100]}")
+                        break
+            except Exception as e:
+                logger.debug(f"行情封面跳过 {rid}: {e}")
+    finally:
+        await page.close()
+    return results
 
 
 async def fetch_covers_batch(codes: list[str]) -> dict[str, str]:

@@ -25,6 +25,24 @@ pkill -f "uvicorn main:app"
 
 访问 `http://localhost:8000`，点击「开始分析」即可。飞书链接已固定（隐藏输入框），无需手动输入。
 
+## 部署
+
+生产环境：`https://funsun.liubaizhiying.cn`（阿里云 ECS + Caddy SSL + 七牛云 vault + rclone mount）
+
+| 组件 | 说明 |
+|------|------|
+| 服务器 | 阿里云 ECS 8.163.21.128 (Ubuntu 22.04) |
+| SSL | Caddy 容器自动管理（复用 remove-bg 项目） |
+| Vault 同步 | 本地 boto3 → 七牛 `jam` bucket → rclone mount `/opt/vault` |
+| 进程管理 | systemd (`funsun.service` + `rclone-vault.service`) |
+| 配置 | 所有密钥在 `.env` 文件中（`.gitignore` 排除） |
+
+更新部署：
+```bash
+scp <files> root@8.163.21.128:/opt/funsun/
+ssh root@8.163.21.128 "systemctl restart funsun"
+```
+
 ## 核心架构
 
 ### 数据流（并发架构）
@@ -106,6 +124,37 @@ Phase 2: 分批并发调 AI
 | `/api/refresh/market` | POST | 单件拍品行情重查询 |
 | `/api/tts` | POST | 文字转语音（火山引擎），参数 `{"text":"...","voice":"音色ID"}` |
 | `/api/item-cover?code=` | GET | 根据拍品 ID 获取封面图 URL（从小茶书后台抓取） |
+| `/api/batch-covers?codes=` | GET | 批量获取行情记录封面图 |
+| `/api/cached-audio?index=` | GET | 获取缓存的音频文件 |
+| `/api/cache/update-commentary` | POST | 更新单条解说稿到缓存快照 |
+| `/api/cache/update-covers` | POST | 批量更新行情封面图到缓存快照 |
+
+## 登录与权限
+
+- JWT 鉴权（`python-jose`），Token 24h 有效期，Cookie 存储
+- 默认管理员：`admin` / `funsun2007`（SHA256 哈希存储）
+- 未登录自动重定向到 `/login`
+- 普通用户只能使用分析功能，管理员可进 `/admin`
+
+## 管理后台（`/admin`）
+
+| 标签页 | 功能 |
+|------|------|
+| 用户管理 | 增删用户（admin 不可删除） |
+| API 配置 | DeepSeek API Key（掩码+眼睛切换）、Base URL、Model |
+| 提示词管理 | 固定介绍模板、生成亮点提示词、语音生成上下文、发音词典 |
+| 修改密码 | 当前账号修改密码 |
+
+### 解说稿生成逻辑
+
+```
+固定介绍 = 管理后台模板 + 拍品字段渲染（本地拼装）
+拍品亮点 = 生成亮点提示词（支持[字段]占位） → DeepSeek API + Obsidian 上下文
+```
+
+### 发音词典
+
+管理后台配置 `原文=替换词`（如 `款识=款志`），TTS 生成时自动替换后再发给火山引擎。
 
 ### 前端
 

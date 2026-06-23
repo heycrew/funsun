@@ -54,9 +54,9 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
 <div id="tab-api" class="tab">
     <div class="card"><h3>DeepSeek API 配置</h3>
         <label>API Key</label>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;align-items:stretch">
             <input id="apiKey" type="password" style="flex:1" autocomplete="off">
-            <button class="btn" style="padding:8px 12px" onclick="toggleApiKey()" title="显示/隐藏">👁</button>
+            <button class="btn" style="padding:0 12px;height:100%;display:flex;align-items:center" onclick="toggleApiKey()" title="显示/隐藏">👁</button>
         </div>
         <label>Base URL</label><input id="apiUrl">
         <label>Model</label><input id="apiModel" placeholder="deepseek-v4-pro">
@@ -68,6 +68,7 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
     <div class="card"><h3>固定介绍（[]中内容对应飞书字段名）</h3><textarea id="tpl" rows="3"></textarea></div>
     <div class="card"><h3>生成亮点提示词（支持[字段名]引用飞书参数）</h3><textarea id="aiPrompt" rows="5"></textarea></div>
     <div class="card"><h3>语音生成上下文</h3><p style="color:#888;font-size:.8em;margin-bottom:8px">TTS 语音生成时的播报风格提示词</p><textarea id="ttsCtx" rows="3"></textarea></div>
+    <div class="card"><h3>发音词典</h3><p style="color:#888;font-size:.8em;margin-bottom:8px">替换某些词为同音字以控制发音，格式：原文=替换词（如：款识=款志），一行一个</p><textarea id="pronDict" rows="4" placeholder="款识=款志&#10;青花=清花"></textarea></div>
     <button class="btn" onclick="doSavePrompt()">保存提示词</button>
 </div>
 
@@ -148,6 +149,10 @@ function loadConfig(){
         document.getElementById('tpl').value=d.commentary_template||'';
         document.getElementById('aiPrompt').value=d.ai_query_prompt||'';
         document.getElementById('ttsCtx').value=d.tts_context||'';
+        var pd = d.pronunciation_dict||{};
+        var pdLines = [];
+        for(var k in pd) pdLines.push(k + '=' + pd[k]);
+        document.getElementById('pronDict').value = pdLines.join('\n');
     });
 }
 function toggleApiKey(){
@@ -166,6 +171,19 @@ function doSavePrompt(){
     gCfg.commentary_template=document.getElementById('tpl').value;
     gCfg.ai_query_prompt=document.getElementById('aiPrompt').value;
     gCfg.tts_context=document.getElementById('ttsCtx').value;
+    // 发音词典：解析 key=value 格式
+    var pdText = document.getElementById('pronDict').value.trim();
+    var pd = {};
+    if(pdText){
+        var lines = pdText.split('\n');
+        for(var i=0;i<lines.length;i++){
+            var parts=lines[i].split('=');
+            if(parts.length>=2 && parts[0].trim() && parts[1].trim()){
+                pd[parts[0].trim()]=parts[1].trim();
+            }
+        }
+    }
+    gCfg.pronunciation_dict=pd;
     fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(gCfg)})
     .then(function(){toast('提示词已保存',true)});
 }
