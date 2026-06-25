@@ -256,14 +256,21 @@ def _render_template(template: str, item: dict, index: int) -> str:
     """用拍品数据渲染固定模板，如 [拍品名字] → item['name']
     规则：若字段值为空或'无'，则移除该字段对应的描述短语（含前导标点）"""
     import re
+    # 空值统一用"无"填充，确保清理 regex 能捕获
+    def _v(key, fallback_key=None):
+        val = item.get(key, "")
+        if not val and fallback_key:
+            val = item.get(fallback_key, "")
+        return val if val else "无"
+
     field_map = {
-        "序号": str(index + 1), "拍品名字": item.get("name", ""),
-        "窑口": item.get("kiln", ""), "款识": item.get("inscription", item.get("kiln", "")),
-        "年份": item.get("era", ""), "年代": item.get("era", ""),
-        "尺寸": item.get("size", ""), "容量": item.get("capacity", item.get("size", "")),
-        "品相": item.get("condition", ""), "参考价": item.get("estimate", ""),
-        "起拍价": item.get("starting_price", ""), "材质": item.get("material", ""),
-        "市场参考价": item.get("estimate", ""),
+        "序号": str(index + 1), "拍品名字": item.get("name", "无"),
+        "窑口": _v("kiln"), "款识": _v("inscription"),
+        "年份": _v("era"), "年代": _v("era"),
+        "尺寸": _v("size"), "容量": _v("capacity", "size"),
+        "品相": _v("condition"), "参考价": _v("estimate"),
+        "起拍价": _v("starting_price"), "材质": _v("material"),
+        "市场参考价": _v("estimate"),
     }
     # 特殊模板单元：整句「本件拍品[原盒/证书]」根据飞书"原盒/证书"字段值替换
     cert_val = item.get("certificate", "") or ""
@@ -287,14 +294,15 @@ def _render_template(template: str, item: dict, index: int) -> str:
     # 清理规则：移除 空值占位符 或 值为"无"的字段
     # 1. 移除 [任意占位符]（值为空未被替换的）
     result = re.sub(r'\[[^\]]+\]', '', result)
-    # 2. 移除 "无" 值及其前面的描述文字/标点
-    #    匹配模式：标点+任意非标点字符+无，如 "，容量无" → 删除
-    result = re.sub(r'[，、；]\s*[^，。；！？、]*?无', '', result)
+    # 2. 移除 "无" 值及其前后的描述文字/标点/后缀单位
+    #    匹配模式：标点+描述+无+后缀单位（如"元"），如 "，市场参考价无元" → 删除
+    result = re.sub(r'[，、；][^，。]*?无[^，。]*?(?=[，。]|$)', '', result)
     # 3. 清理残留：连续的标点 → 单个
     result = re.sub(r'[，、；]{2,}', '，', result)
     # 4. 清理句首逗号
     result = re.sub(r'^[，、；]\s*', '', result)
-    # 5. 清理句尾多余的标点后跟句号
+    # 5. 清理句尾多余的标点
+    result = re.sub(r'[，、；]\s*$', '', result)
     result = re.sub(r'[，、；]\s*。', '。', result)
 
     return result

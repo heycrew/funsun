@@ -1047,23 +1047,24 @@
                     // 无/无 或空值 → certReplace 保持 ''（整句移除）
                     var fresh = tpl.replace(/本件拍品\[原盒\/证书\]/g, certReplace)
                         .replace(/\[序号\]/g, num)
-                        .replace(/\[拍品名字\]/g, d.name || '')
-                        .replace(/\[款识\]/g, d.inscription || d.kiln || '')
-                        .replace(/\[窑口\]/g, d.kiln || '')
-                        .replace(/\[年份\]/g, d.era || '')
-                        .replace(/\[年代\]/g, d.era || '')
-                        .replace(/\[尺寸\]/g, d.size || '')
-                        .replace(/\[容量\]/g, d.capacity || d.size || '')
-                        .replace(/\[品相\]/g, d.condition || '')
-                        .replace(/\[参考价\]/g, d.estimate || '')
-                        .replace(/\[起拍价\]/g, d.starting_price || '')
-                        .replace(/\[材质\]/g, d.material || '')
-                        .replace(/\[市场参考价\]/g, d.estimate || '');
+                        .replace(/\[拍品名字\]/g, d.name || '无')
+                        .replace(/\[款识\]/g, d.inscription || '无')
+                        .replace(/\[窑口\]/g, d.kiln || '无')
+                        .replace(/\[年份\]/g, d.era || '无')
+                        .replace(/\[年代\]/g, d.era || '无')
+                        .replace(/\[尺寸\]/g, d.size || '无')
+                        .replace(/\[容量\]/g, d.capacity || d.size || '无')
+                        .replace(/\[品相\]/g, d.condition || '无')
+                        .replace(/\[参考价\]/g, d.estimate || '无')
+                        .replace(/\[起拍价\]/g, d.starting_price || '无')
+                        .replace(/\[材质\]/g, d.material || '无')
+                        .replace(/\[市场参考价\]/g, d.estimate || '无');
                     // 清理空值/无值字段
                     fresh = fresh.replace(/\[[^\]]+\]/g, '');  // 移除未替换的占位符
-                    fresh = fresh.replace(/[，、；]\s*[^，。；！？、]*?无/g, '');  // 移除值为"无"的描述
+                    fresh = fresh.replace(/[，、；][^，。]*?无[^，。]*?(?=[，。]|$)/g, '');  // 移除"无"值含后缀
                     fresh = fresh.replace(/[，、；]{2,}/g, '，');
                     fresh = fresh.replace(/^[，、；]\s*/g, '');
+                    fresh = fresh.replace(/[，、；]\s*$/g, '');
                     fresh = fresh.replace(/[，、；]\s*。/g, '。');
                     data.template_text = fresh;
                     var textEl = document.getElementById('tplText-' + idx);
@@ -1170,51 +1171,50 @@
                 fetchCoverImage(idx, data.code);
             }
 
-            // === 解说稿 ===
-            if (data.commentary) {
-                html += `<div class="expand-block commentary-block">
-                    <h4>解说稿</h4>
-                    <!-- 音色选择 -->
-                    <div class="tts-toolbar">
-                        <select class="voice-select" id="voiceSelect-${idx}">
-                            <option value="zh_male_wennuanahu_uranus_bigtts">AI音色(系统)</option>
-                            <option value="S_2fqs4pf62">志波(复刻)</option>
-                            <option value="S_1fqs4pf62">锦卉(复刻)</option>
-                            <option value="S_0fqs4pf62">杨雪(复刻)</option>
-                            <option value="S_Zeqs4pf62">培文(复刻)</option>
-                        </select>
+            // === 解说稿（音色选择 + 固定介绍始终显示，拍品亮点仅在有解说稿时显示）===
+            html += `<div class="expand-block commentary-block">
+                <h4>解说稿</h4>
+                <div class="tts-toolbar">
+                    <select class="voice-select" id="voiceSelect-${idx}">
+                        <option value="zh_male_wennuanahu_uranus_bigtts">AI音色(系统)</option>
+                        <option value="S_2fqs4pf62">志波(复刻)</option>
+                        <option value="S_1fqs4pf62">锦卉(复刻)</option>
+                        <option value="S_0fqs4pf62">杨雪(复刻)</option>
+                        <option value="S_Zeqs4pf62">培文(复刻)</option>
+                    </select>
+                </div>
+                <!-- 固定介绍（始终显示，无 AI 解说稿也展示） -->
+                <div class="dual-audio-block">
+                    <div class="dual-label">📋 固定介绍
+                        <button class="edit-btn-inline" id="tpl-editBtn-${idx}" onclick="editTemplateText(${idx})" title="编辑">✎</button>
+                        <button class="edit-btn-inline" style="float:right" onclick="regenTemplateText(${idx})" title="重新生成固定介绍文案">🔄 生成文案</button>
                     </div>
-                    <!-- 固定介绍（固定话术） -->
-                    <div class="dual-audio-block">
-                        <div class="dual-label">📋 固定介绍
-                            <button class="edit-btn-inline" id="tpl-editBtn-${idx}" onclick="editTemplateText(${idx})" title="编辑">✎</button>
-                            <button class="edit-btn-inline" style="float:right" onclick="regenTemplateText(${idx})" title="重新生成固定介绍文案">🔄 生成文案</button>
-                        </div>
-                        <div class="tpl-text" id="tplText-${idx}">${esc(data.template_text || getAudioText(data,'template'))}</div>
-                        <textarea class="commentary-edit hidden" id="tplEdit-${idx}" rows="3"></textarea>
-                        <button class="save-btn hidden" id="tpl-saveBtn-${idx}" onclick="editTemplateText(${idx})">💾 保存</button>
-                        <button class="tts-btn" id="tpl-ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'template')">🔊 生成语音</button>
-                        <div class="audio-player" id="tpl-audioPlayer-${idx}" style="display:none">
-                            <div class="audio-controls" id="tpl-audioControls-${idx}"></div>
-                        </div>
-                    </div>
-                    <!-- 拍品亮点（AI解说稿） -->
-                    <div class="dual-audio-block">
-                        <div class="dual-label">🎙️ 拍品亮点
-                            <button class="edit-btn-inline" id="editBtn-${idx}" onclick="editCommentary(${idx})" title="编辑">✎</button>
-                            <button class="edit-btn-inline" style="float:right" onclick="refreshCommentary(${idx})" title="重新生成亮点文案">🔄 生成文案</button>
-                        </div>
-                        <div class="commentary-text" id="commentaryText-${idx}">${esc(data.commentary)}</div>
-                        <textarea class="commentary-edit hidden" id="commentaryEdit-${idx}" rows="5"></textarea>
-                        <button class="save-btn hidden" id="saveBtn-${idx}" onclick="editCommentary(${idx})">💾 保存</button>
-                        <button class="tts-btn" id="ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'commentary')">🔊 生成语音</button>
-                        <div class="audio-player" id="audioPlayer-${idx}" style="display:none">
-                            <div class="audio-controls" id="audioControls-${idx}"></div>
-                        </div>
-                        <div class="subtitle-area" id="subtitle-${idx}" style="display:none"></div>
+                    <div class="tpl-text" id="tplText-${idx}">${esc(data.template_text || getAudioText(data,'template'))}</div>
+                    <textarea class="commentary-edit hidden" id="tplEdit-${idx}" rows="3"></textarea>
+                    <button class="save-btn hidden" id="tpl-saveBtn-${idx}" onclick="editTemplateText(${idx})">💾 保存</button>
+                    <button class="tts-btn" id="tpl-ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'template')">🔊 生成语音</button>
+                    <div class="audio-player" id="tpl-audioPlayer-${idx}" style="display:none">
+                        <div class="audio-controls" id="tpl-audioControls-${idx}"></div>
                     </div>
                 </div>`;
+            // 拍品亮点（仅在有 AI 解说稿时显示）
+            if (data.commentary) {
+                html += `<div class="dual-audio-block">
+                    <div class="dual-label">🎙️ 拍品亮点
+                        <button class="edit-btn-inline" id="editBtn-${idx}" onclick="editCommentary(${idx})" title="编辑">✎</button>
+                        <button class="edit-btn-inline" style="float:right" onclick="refreshCommentary(${idx})" title="重新生成亮点文案">🔄 生成文案</button>
+                    </div>
+                    <div class="commentary-text" id="commentaryText-${idx}">${esc(data.commentary)}</div>
+                    <textarea class="commentary-edit hidden" id="commentaryEdit-${idx}" rows="5"></textarea>
+                    <button class="save-btn hidden" id="saveBtn-${idx}" onclick="editCommentary(${idx})">💾 保存</button>
+                    <button class="tts-btn" id="ttsBtn-${idx}" onclick="generateDualSpeech(${idx},'commentary')">🔊 生成语音</button>
+                    <div class="audio-player" id="audioPlayer-${idx}" style="display:none">
+                        <div class="audio-controls" id="audioControls-${idx}"></div>
+                    </div>
+                    <div class="subtitle-area" id="subtitle-${idx}" style="display:none"></div>
+                </div>`;
             }
+            html += '</div>';
 
             // === 成交行情（Obsidian CSV） ===
             html += '<div class="expand-block market-block"><h4>成交行情';
