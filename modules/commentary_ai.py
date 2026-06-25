@@ -256,18 +256,19 @@ def _render_template(template: str, item: dict, index: int) -> str:
     """用拍品数据渲染固定模板，如 [拍品名字] → item['name']
     规则：若字段值为空或'无'，则移除该字段对应的描述短语（含前导标点）"""
     import re
-    # 空值统一用"无"填充，确保清理 regex 能捕获
+    # 空值/值为"无"时用特殊标记填充，与正常文本中的"无"字区分
+    _REMOVE = '\x00REMOVE\x00'
     def _v(key, fallback_key=None):
         val = item.get(key, "")
-        if not val and fallback_key:
+        if (not val or val == "无") and fallback_key:
             val = item.get(fallback_key, "")
-        return val if val else "无"
+        return val if (val and val != "无") else _REMOVE
 
     field_map = {
         "序号": str(index + 1), "拍品名字": item.get("name", "无"),
         "窑口": _v("kiln"), "款识": _v("inscription"),
         "年份": _v("era"), "年代": _v("era"),
-        "尺寸": _v("size"), "容量": _v("capacity", "size"),
+        "尺寸": _v("size"), "容量": _v("capacity"),
         "品相": _v("condition"), "参考价": _v("estimate"),
         "起拍价": _v("starting_price"), "材质": _v("material"),
         "市场参考价": _v("estimate"),
@@ -294,9 +295,9 @@ def _render_template(template: str, item: dict, index: int) -> str:
     # 清理规则：移除 空值占位符 或 值为"无"的字段
     # 1. 移除 [任意占位符]（值为空未被替换的）
     result = re.sub(r'\[[^\]]+\]', '', result)
-    # 2. 移除 "无" 值及其前后的描述文字/标点/后缀单位
-    #    匹配模式：标点+描述+无+后缀单位（如"元"），如 "，市场参考价无元" → 删除
-    result = re.sub(r'[，、；][^，。]*?无[^，。]*?(?=[，。]|$)', '', result)
+    # 2. 移除标记为空值的字段及其前后描述文字/标点/后缀单位
+    #    使用特殊标记避免与正常文本中的"无"字冲突
+    result = re.sub(rf'[，、；][^，。]*?{_REMOVE}[^，。]*?(?=[，。]|$)', '', result)
     # 3. 清理残留：连续的标点 → 单个
     result = re.sub(r'[，、；]{2,}', '，', result)
     # 4. 清理句首逗号

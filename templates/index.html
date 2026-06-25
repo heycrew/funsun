@@ -1045,23 +1045,25 @@
                     else if (certVal === '有/有') certReplace = '本件拍品有证书有窑口原配盒子';
                     else if (certVal === '无/有') certReplace = '本件拍品有证书';
                     // 无/无 或空值 → certReplace 保持 ''（整句移除）
+                    // 辅助：空值/null/"无"统一返回标记
+                    function fv(val, fb) { var v = val; if (!v || v === '无') v = fb; return (v && v !== '无') ? v : '\x00REMOVE\x00'; }
                     var fresh = tpl.replace(/本件拍品\[原盒\/证书\]/g, certReplace)
                         .replace(/\[序号\]/g, num)
-                        .replace(/\[拍品名字\]/g, d.name || '无')
-                        .replace(/\[款识\]/g, d.inscription || '无')
-                        .replace(/\[窑口\]/g, d.kiln || '无')
-                        .replace(/\[年份\]/g, d.era || '无')
-                        .replace(/\[年代\]/g, d.era || '无')
-                        .replace(/\[尺寸\]/g, d.size || '无')
-                        .replace(/\[容量\]/g, d.capacity || d.size || '无')
-                        .replace(/\[品相\]/g, d.condition || '无')
-                        .replace(/\[参考价\]/g, d.estimate || '无')
-                        .replace(/\[起拍价\]/g, d.starting_price || '无')
-                        .replace(/\[材质\]/g, d.material || '无')
-                        .replace(/\[市场参考价\]/g, d.estimate || '无');
-                    // 清理空值/无值字段
-                    fresh = fresh.replace(/\[[^\]]+\]/g, '');  // 移除未替换的占位符
-                    fresh = fresh.replace(/[，、；][^，。]*?无[^，。]*?(?=[，。]|$)/g, '');  // 移除"无"值含后缀
+                        .replace(/\[拍品名字\]/g, fv(d.name))
+                        .replace(/\[款识\]/g, fv(d.inscription))
+                        .replace(/\[窑口\]/g, fv(d.kiln))
+                        .replace(/\[年份\]/g, fv(d.era))
+                        .replace(/\[年代\]/g, fv(d.era))
+                        .replace(/\[尺寸\]/g, fv(d.size))
+                        .replace(/\[容量\]/g, fv(d.capacity))
+                        .replace(/\[品相\]/g, fv(d.condition))
+                        .replace(/\[参考价\]/g, fv(d.estimate))
+                        .replace(/\[起拍价\]/g, fv(d.starting_price))
+                        .replace(/\[材质\]/g, fv(d.material))
+                        .replace(/\[市场参考价\]/g, fv(d.estimate));
+                    // 清理空值/无值字段（匹配特殊标记）
+                    fresh = fresh.replace(/\[[^\]]+\]/g, '');
+                    fresh = fresh.replace(/[，、；][^，。]*?\x00REMOVE\x00[^，。]*?(?=[，。]|$)/g, '');
                     fresh = fresh.replace(/[，、；]{2,}/g, '，');
                     fresh = fresh.replace(/^[，、；]\s*/g, '');
                     fresh = fresh.replace(/[，、；]\s*$/g, '');
