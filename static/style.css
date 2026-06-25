@@ -37,6 +37,25 @@ body {
     transition: opacity 0.15s;
 }
 .stop-btn:hover { opacity: 0.85; }
+.pip-btn {
+    padding: 10px 18px; background: linear-gradient(135deg, #e67e22, #d35400);
+    color: #fff; border: none; border-radius: 8px; font-size: 0.9em;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+    transition: opacity 0.15s;
+}
+.pip-btn:hover { opacity: 0.85; }
+.pip-btn.pip-active { background: linear-gradient(135deg, #27ae60, #1e8449); }
+.batch-btn {
+    padding: 8px 16px; background: #2c3e50; color: #fff;
+    border: none; border-radius: 6px; font-size: 0.85em;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+    transition: opacity 0.15s;
+}
+.batch-btn:hover { opacity: 0.85; }
+.batch-progress {
+    font-size: 0.8em; color: #e67e22; font-weight: 600;
+}
+.audio-status { font-variant-numeric: tabular-nums; }
 
 /* ===== 错误 ===== */
 .error-section { margin-bottom: 16px; }
@@ -62,7 +81,7 @@ body {
     border: 1px solid rgba(0,0,0,0.06);
 }
 .summary-card h2 { font-size: 0.9em; font-weight: 600; color: #8a8f98; margin-bottom: 20px; letter-spacing: 0.3px; text-transform: uppercase; }
-.summary-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-bottom: 24px; }
+.summary-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-bottom: 24px; }
 .summary-stat {
     text-align: center; padding: 16px 12px;
     border-right: 1px solid rgba(0,0,0,0.06);
@@ -78,6 +97,14 @@ body {
 .kiln-row .kbar-wrap { flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; position: relative; }
 .kiln-row .kbar { position: absolute; left: 0; top: 0; height: 8px; background: #5e6ad2; border-radius: 4px; }
 .kiln-row .kinfo { font-size: 0.8em; color: #999; white-space: nowrap; flex-shrink: 0; min-width: 80px; }
+.kiln-hidden { display: none; }
+.kiln-expanded .kiln-hidden { display: flex; }
+.kiln-toggle-btn {
+    padding: 6px 20px; background: #f5f5f5; color: #555;
+    border: 1px solid #e0e0e0; border-radius: 6px;
+    font-size: 0.8em; cursor: pointer; transition: all 0.15s;
+}
+.kiln-toggle-btn:hover { background: #e8e8e8; color: #333; }
 
 /* ===== 结果 ===== */
 .result-section { animation: fadeIn 0.3s ease; }
@@ -110,7 +137,9 @@ body {
 .data-table tbody tr:hover { background: #fafbfc; }
 .name-cell { font-weight: 500; }
 .name-changed { color: #e74c3c; }
-.price-cell { color: #e74c3c; font-weight: 600; white-space: nowrap; }
+.price-cell { font-weight: 600; white-space: nowrap; }
+.start-price { color: #e74c3c; }
+.est-price { color: #222; }
 
 /* 状态标签 */
 .status-tag { font-size: 0.82em; padding: 3px 10px; border-radius: 10px; font-weight: 500; }
@@ -388,6 +417,30 @@ body {
 /* ===== 通用 ===== */
 .hidden { display: none !important; }
 .empty-text { color: #bbb; text-align: center; padding: 20px; }
+
+/* ===== 成交预估 ===== */
+.predict-loading { color: #ccc; animation: pulse 1.5s infinite; }
+.predict-val {
+    background: linear-gradient(135deg, #f39c12, #e67e22);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: blur(6px);
+    transition: filter 0.3s;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.predict-val.reveal {
+    filter: blur(0);
+}
+/* PC hover 显示 */
+@media (hover: hover) {
+    .predict-val:hover { filter: blur(0); }
+}
+.conf-high { color: #27ae60; font-style: normal; }
+.conf-medium { color: #f39c12; font-style: normal; }
+.conf-low { color: #e67e22; font-style: normal; }
+.conf-very_low { color: #e74c3c; font-style: normal; }
 
 @media (max-width: 768px) {
     .input-group { flex-direction: column; }

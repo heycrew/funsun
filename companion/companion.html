@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>拍卖看板</title>
+<style>
+    :root {
+        --bg-opacity: 0.80;
+        --font-size: 36px;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+        width: 100%; height: 100%; margin: 0;
+        font-family: "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+        overflow: hidden;
+    }
+    body {
+        display: flex; flex-direction: column;
+        background: rgba(8, 8, 12, var(--bg-opacity));
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    /* ===== 标题栏（禁止文案区）===== */
+    .title-bar {
+        height: 34px; min-height: 34px;
+        display: flex; align-items: center;
+        padding: 0 8px 0 14px;
+        background: rgba(0,0,0,0.15);
+        border-radius: 12px 12px 0 0;
+        flex-shrink: 0;
+    }
+    .title-bar .conn-dot {
+        display: inline-block; width: 7px; height: 7px;
+        border-radius: 50%; margin-right: 6px; flex-shrink: 0;
+    }
+    .title-bar .conn-dot.connected { background: #2ecc71; box-shadow: 0 0 6px rgba(46,204,113,0.5); }
+    .title-bar .conn-dot.disconnected { background: #e74c3c; box-shadow: 0 0 6px rgba(231,76,60,0.4); }
+    .title-bar .title {
+        font-size: 11px; color: rgba(255,255,255,0.35);
+        letter-spacing: 0.5px; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
+    }
+    .title-bar .spacer { flex: 1; }
+    .title-bar .actions { display: flex; align-items: center; gap: 4px; }
+    .title-bar .actions button {
+        width: 28px; height: 28px; border: none; border-radius: 6px;
+        background: transparent; color: rgba(255,255,255,0.45);
+        cursor: pointer; font-size: 14px;
+        display: flex; align-items: center; justify-content: center;
+        transition: all 0.2s;
+    }
+    .title-bar .actions button:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.9); }
+    .title-bar .actions button.pin-active { color: #e67e22; background: rgba(230,126,34,0.2); }
+    .title-bar .actions button.btn-close:hover { background: rgba(231,76,60,0.5); color: #fff; }
+
+    /* ===== 拍品名称（标题栏延伸）===== */
+    .item-name {
+        padding: 2px 14px;
+        font-size: 12px; color: rgba(255,255,255,0.3);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        min-height: 18px; flex-shrink: 0;
+    }
+
+    /* ===== 字幕区（唯一文案展示区，溢出自动上滚）===== */
+    .subtitle-area {
+        flex: 1;
+        display: flex; align-items: center; justify-content: center;
+        padding: 8px 28px;
+        overflow-y: auto;
+        min-height: 60px;
+    }
+    .subtitle-area::-webkit-scrollbar { width: 3px; }
+    .subtitle-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+    .subtitle-text {
+        font-size: var(--font-size); font-weight: 700;
+        color: #fff; text-align: center; line-height: 1.5; word-break: break-all;
+        text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 0 12px rgba(0,0,0,0.7), 0 0 30px rgba(0,0,0,0.5);
+        transition: font-size 0.2s;
+        /* 保证可滚动到顶部 */
+        scroll-margin-top: 0;
+    }
+    .subtitle-text.idle {
+        font-size: 16px; font-weight: 400;
+        color: rgba(255,255,255,0.2); text-shadow: none;
+    }
+
+    /* ===== 底部操作栏（禁止文案区）===== */
+    .bottom-bar {
+        display: flex; align-items: center;
+        padding: 8px 12px 12px;
+        flex-shrink: 0;
+    }
+    .audio-btn-wrap {
+        flex: 1; display: flex;
+        min-width: 0;
+    }
+    .audio-btn-wrap.left { justify-content: flex-start; }
+    .audio-btn-wrap.right { justify-content: flex-end; }
+
+    .audio-btn {
+        position: relative;
+        width: 100%; height: 44px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 8px;
+        background: rgba(255,255,255,0.04);
+        color: rgba(255,255,255,0.55);
+        cursor: pointer; font-size: 13px;
+        overflow: hidden;
+        display: flex; align-items: center; justify-content: center;
+        padding: 0 14px;
+        transition: all 0.2s;
+    }
+    .audio-btn:hover {
+        border-color: rgba(255,255,255,0.22);
+        color: rgba(255,255,255,0.85);
+    }
+    .audio-btn .btn-fill {
+        position: absolute; left: 0; top: 0; height: 100%; width: 0%;
+        background: rgba(230,126,34,0.35);
+        border-radius: 7px 0 0 7px;
+        transition: width 0.25s;
+        z-index: 0;
+    }
+    .audio-btn .btn-content {
+        position: relative; z-index: 1;
+        display: flex; align-items: center; justify-content: space-between;
+        width: 100%;
+    }
+    .audio-btn .btn-icon-label {
+        display: flex; align-items: center; gap: 6px;
+    }
+    .audio-btn .btn-countdown {
+        font-size: 11px; color: rgba(255,255,255,0.5);
+        font-family: "Consolas", monospace;
+        font-variant-numeric: tabular-nums;
+        display: none;
+    }
+    .audio-btn.playing {
+        border-color: rgba(230,126,34,0.5);
+        color: #f0a040;
+    }
+    .audio-btn.playing .btn-icon-label { color: #f0a040; font-weight: 600; }
+    .audio-btn.playing .btn-countdown { display: inline; color: #f0a040; }
+
+    /* 中栏 */
+    .nav-group {
+        display: flex; align-items: center; gap: 6px;
+        padding: 0 8px; flex-shrink: 0;
+    }
+    .nav-group button {
+        width: 32px; height: 32px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 50%;
+        background: rgba(255,255,255,0.04);
+        color: rgba(255,255,255,0.5);
+        cursor: pointer; font-size: 13px;
+        transition: all 0.2s;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .nav-group button:hover {
+        background: rgba(255,255,255,0.12); color: #fff;
+        border-color: rgba(255,255,255,0.2);
+    }
+    .nav-group .item-num {
+        font-size: 16px; color: #f0a040;
+        font-weight: 800; min-width: 24px; text-align: center;
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 0 8px rgba(240,160,64,0.3);
+    }
+    .divider {
+        width: 1px; height: 24px;
+        background: rgba(255,255,255,0.08);
+        flex-shrink: 0;
+    }
+
+    /* ===== 设置面板 ===== */
+    .settings-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.55);
+        display: none; align-items: center; justify-content: center;
+        z-index: 100;
+    }
+    .settings-overlay.show { display: flex; }
+    .settings-panel {
+        background: #1a1a24;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 12px; padding: 28px 24px;
+        width: 310px; max-width: 90vw;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    }
+    .settings-panel h3 {
+        font-size: 14px; color: rgba(255,255,255,0.65);
+        margin-bottom: 20px; font-weight: 600;
+    }
+    .settings-row { margin-bottom: 16px; }
+    .settings-row .row-label { font-size: 12px; color: rgba(255,255,255,0.45); }
+    .settings-row-inline { display: flex; align-items: center; justify-content: space-between; }
+    .settings-row-inline .row-label { margin-bottom: 0; }
+    .adj-group { display: flex; align-items: center; gap: 8px; }
+    .adj-group button {
+        width: 30px; height: 30px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.7);
+        cursor: pointer; font-size: 16px; line-height: 1;
+        transition: all 0.15s;
+    }
+    .adj-group button:hover {
+        background: rgba(230,126,34,0.3);
+        border-color: rgba(230,126,34,0.4); color: #fff;
+    }
+    .adj-group .adj-val {
+        min-width: 48px; text-align: center;
+        font-size: 13px; color: #e67e22; font-weight: 600;
+    }
+    .settings-row input[type=text] {
+        width: 100%; padding: 7px 10px; margin-top: 6px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px; background: rgba(255,255,255,0.04);
+        color: rgba(255,255,255,0.65); font-size: 11px;
+        outline: none;
+    }
+    .settings-row input[type=text]:focus { border-color: rgba(230,126,34,0.4); }
+    .settings-row .toggle-row {
+        display: flex; align-items: center; justify-content: space-between;
+        font-size: 12px; color: rgba(255,255,255,0.45);
+    }
+    .settings-row .toggle-switch {
+        width: 42px; height: 24px;
+        background: rgba(255,255,255,0.15);
+        border-radius: 12px; cursor: pointer;
+        position: relative; transition: background 0.2s;
+    }
+    .settings-row .toggle-switch.on { background: rgba(230,126,34,0.55); }
+    .settings-row .toggle-switch::after {
+        content: ''; position: absolute;
+        top: 3px; left: 3px;
+        width: 18px; height: 18px;
+        background: #fff; border-radius: 50%;
+        transition: left 0.2s;
+    }
+    .settings-row .toggle-switch.on::after { left: 21px; }
+    .settings-panel .close-btn {
+        display: block; width: 100%; margin-top: 20px;
+        padding: 10px; border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px; background: rgba(255,255,255,0.05);
+        color: rgba(255,255,255,0.55); font-size: 13px;
+        cursor: pointer; transition: all 0.2s;
+    }
+    .settings-panel .close-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
+
+    /* ===== 缩放手柄 ===== */
+    .resize-grip {
+        position: fixed; bottom: 2px; right: 2px;
+        width: 18px; height: 18px; cursor: nwse-resize;
+        z-index: 200;
+    }
+    .resize-grip::after {
+        content: ''; position: absolute; bottom: 0; right: 0;
+        width: 0; height: 0;
+        border-style: solid;
+        border-width: 0 0 14px 14px;
+        border-color: transparent transparent rgba(255,255,255,0.2) transparent;
+    }
+</style>
+</head>
+<body>
+
+<!-- 标题栏 -->
+<div class="title-bar">
+    <span class="conn-dot disconnected" id="connDot"></span>
+    <span class="title" id="connLabel">拍卖看板</span>
+    <span class="spacer"></span>
+    <div class="actions">
+        <button id="btnPin" onclick="togglePin()" title="切换置顶">📌</button>
+        <button id="btnSettings" onclick="toggleSettings()" title="设置">⚙</button>
+        <button class="btn-close" onclick="closeWindow()" title="关闭 (Esc)">✕</button>
+    </div>
+</div>
+
+<!-- 拍品名称 -->
+<div class="item-name" id="itemName"></div>
+
+<!-- 字幕区 -->
+<div class="subtitle-area" id="subtitleArea">
+    <div class="subtitle-text idle" id="subtitle">等待播放…</div>
+</div>
+
+<!-- 底部操作栏 -->
+<div class="bottom-bar">
+    <div class="audio-btn-wrap left">
+        <button class="audio-btn" id="btnTemplate" onclick="audioBtnClick('template')">
+            <span class="btn-fill" id="fillTemplate"></span>
+            <span class="btn-content">
+                <span class="btn-icon-label">▶ 固定介绍</span>
+                <span class="btn-countdown" id="cdTemplate"></span>
+            </span>
+        </button>
+    </div>
+
+    <span class="divider"></span>
+
+    <div class="nav-group">
+        <button onclick="navItem(-1)" title="上一件 (←)">⏮</button>
+        <span class="item-num" id="itemNum">-</span>
+        <button onclick="navItem(1)" title="下一件 (→)">⏭</button>
+    </div>
+
+    <span class="divider"></span>
+
+    <div class="audio-btn-wrap right">
+        <button class="audio-btn" id="btnCommentary" onclick="audioBtnClick('commentary')">
+            <span class="btn-fill" id="fillCommentary"></span>
+            <span class="btn-content">
+                <span class="btn-icon-label">▶ 拍品亮点</span>
+                <span class="btn-countdown" id="cdCommentary"></span>
+            </span>
+        </button>
+    </div>
+</div>
+
+<!-- 缩放手柄 -->
+<div class="resize-grip" id="resizeGrip"></div>
+
+<!-- 设置面板 -->
+<div class="settings-overlay" id="settingsOverlay" onclick="closeSettings(event)">
+    <div class="settings-panel" onclick="event.stopPropagation()">
+        <h3>⚙ 看板设置</h3>
+        <div class="settings-row settings-row-inline">
+            <span class="row-label">字幕字号</span>
+            <div class="adj-group">
+                <button onclick="adjFontSize(-2)">-</button>
+                <span class="adj-val" id="valFontSize">36px</span>
+                <button onclick="adjFontSize(+2)">+</button>
+            </div>
+        </div>
+        <div class="settings-row">
+            <div class="toggle-row">
+                <span>窗口置顶</span>
+                <div class="toggle-switch on" id="togglePinSwitch" onclick="togglePin()"></div>
+            </div>
+        </div>
+        <div class="settings-row">
+            <div class="row-label">服务器地址</div>
+            <input type="text" id="inputServerUrl" placeholder="wss://funsun.liubaizhiying.cn/ws/playback">
+        </div>
+        <button class="close-btn" onclick="toggleSettings()">关闭</button>
+    </div>
+</div>
+
+<script>
+    var DEFAULT_SERVER = 'wss://funsun.liubaizhiying.cn/ws/playback';
+    var _ws = null, _wsReconnectTimer = null, _wsReconnectDelay = 3000;
+    var _state = null, _pinned = true, _lastSettings = {};
+    var _pendingIndex = null;
+    var _finishedAudio = {};  // 追踪每个拍品的已播放状态 { '0_template': true, '0_commentary': true }
+
+    // ===== 设置 =====
+    function loadSettings() {
+        try { _lastSettings = JSON.parse(localStorage.getItem('companion_settings')) || {}; }
+        catch(e) { _lastSettings = {}; }
+        return _lastSettings;
+    }
+    function saveSettings(s) { Object.assign(_lastSettings, s); localStorage.setItem('companion_settings', JSON.stringify(_lastSettings)); }
+
+    function applySettings() {
+        var s = loadSettings();
+        var fs = s.fontSize || 36;
+        document.getElementById('valFontSize').textContent = fs + 'px';
+        document.documentElement.style.setProperty('--font-size', fs + 'px');
+        _pinned = s.pinned !== undefined ? s.pinned : true;
+        if (window.pywebview && window.pywebview.api) { window.pywebview.api.set_on_top(_pinned); }
+        syncPinUI();
+        document.getElementById('inputServerUrl').value = s.serverUrl || DEFAULT_SERVER;
+    }
+
+    function adjFontSize(delta) {
+        var s = loadSettings();
+        var fs = Math.max(20, Math.min(100, (s.fontSize || 36) + delta));
+        s.fontSize = fs; saveSettings(s);
+        document.getElementById('valFontSize').textContent = fs + 'px';
+        document.documentElement.style.setProperty('--font-size', fs + 'px');
+        // 字号变化后滚动字幕到顶部
+        document.getElementById('subtitleArea').scrollTop = 0;
+    }
+
+    // ===== WebSocket =====
+    function getWsUrl() { return loadSettings().serverUrl || DEFAULT_SERVER; }
+
+    function wsConnect() {
+        if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return;
+        _ws = new WebSocket(getWsUrl());
+        _ws.onopen = function() {
+            _ws.send(JSON.stringify({type:'hello',role:'companion'}));
+            _wsReconnectDelay = 3000; setConnected(true);
+            // 默认显示序号 1
+            if (_pendingIndex === null && !_state) {
+                _pendingIndex = 0;
+                document.getElementById('itemNum').textContent = '1';
+                document.getElementById('itemName').textContent = '#1';
+            }
+            // 如果服务器有缓存状态，会立即收到 playback_state
+            // 否则 1.5 秒后主动请求展开拍品 #1
+            var checkState = _state;
+            setTimeout(function() {
+                if (!_state && _ws && _ws.readyState === WebSocket.OPEN) {
+                    _ws.send(JSON.stringify({type:'control', action:'select_item', index:0}));
+                }
+            }, 1500);
+        };
+        _ws.onmessage = function(e) {
+            try {
+                var msg = JSON.parse(e.data);
+                if (msg.type === 'playback_state') {
+                    var newIndex = msg.index;
+                    var oldIndex = _state ? _state.index : -1;
+                    if (newIndex !== oldIndex) { _finishedAudio = {}; }
+                    _state = msg; _pendingIndex = null;
+                    if (msg.playing) {
+                        delete _finishedAudio[newIndex + '_' + msg.audio_type];
+                    }
+                    updateUI(msg);
+                } else if (msg.type === 'idle') {
+                    if (_state) {
+                        var finishedType = _state.audio_type;
+                        _finishedAudio[_state.index + '_' + finishedType] = true;
+                        _state.playing = false;
+                        _state.progress = 0;
+                        _state.current_time = _state.duration || 0;
+                        updateUI(_state);
+                        showFinished(finishedType);
+                    }
+                } else if (msg.type === 'no_audio') {
+                    if (_state) {
+                        _state.playing = false; _state.progress = 0;
+                        updateUI(_state);
+                    }
+                    showNoAudio(msg.audio_type);
+                } else if (msg.type === 'browser_connected') {
+                    // 浏览器就绪，但没有播放状态 → 延迟发送避免 onmessage 内 send 导致断连
+                    if (!_state) {
+                        _pendingIndex = 0;
+                        document.getElementById('itemNum').textContent = '1';
+                        document.getElementById('itemName').textContent = '#1';
+                        setTimeout(function() {
+                            if (_ws && _ws.readyState === WebSocket.OPEN) {
+                                _ws.send(JSON.stringify({type:'control', action:'select_item', index:0}));
+                            }
+                        }, 200);
+                    }
+                }
+            } catch(err) {}
+        };
+        _ws.onclose = function() {
+            _ws = null; setConnected(false);
+            if (_wsReconnectTimer) clearTimeout(_wsReconnectTimer);
+            _wsReconnectTimer = setTimeout(function() {
+                wsConnect(); _wsReconnectDelay = Math.min(_wsReconnectDelay * 2, 30000);
+            }, _wsReconnectDelay);
+        };
+        _ws.onerror = function() { if (_ws) { _ws.close(); } };
+    }
+
+    function sendControl(action, extra) {
+        var msg = { type: 'control', action: action };
+        if (_state) { msg.index = _state.index; msg.audio_type = _state.audio_type; }
+        if (extra) Object.assign(msg, extra);
+        if (_ws && _ws.readyState === WebSocket.OPEN) { _ws.send(JSON.stringify(msg)); }
+    }
+
+    function audioBtnClick(type) {
+        if (!_state) return;
+        var isActive = (_state.audio_type === type);
+        if (isActive && _state.playing) {
+            // 暂停当前
+            sendControl('pause');
+            _state.playing = false;
+            updateAudioBtns(type, null, 0, 0, 0);
+        } else if (isActive && !_state.playing) {
+            // 恢复播放
+            sendControl('play');
+            _state.playing = true;
+            updateAudioBtns(type, type, 0, _state.duration || 1, 0);
+        } else {
+            // 切换到另一种音频：重置旧按钮，激活新按钮
+            var oldType = _state.audio_type;
+            _state.audio_type = type;
+            _state.playing = true;
+            _state.progress = 0;
+            _state.current_time = 0;
+            // 强制重置旧按钮（清除填充和倒计时）
+            updateOneBtn(oldType === 'template' ? 'Template' : 'Commentary',
+                oldType === 'template' ? '固定介绍' : '拍品亮点',
+                false, false, 0, 0, 0);
+            // 激活新按钮
+            updateOneBtn(type === 'template' ? 'Template' : 'Commentary',
+                type === 'template' ? '固定介绍' : '拍品亮点',
+                true, true, 0, _state.duration || 1, 0);
+            sendControl('play', { audio_type: type });
+        }
+    }
+
+    function navItem(delta) {
+        // 计算目标序号
+        var curIdx = _state ? _state.index : (_pendingIndex !== null ? _pendingIndex : -1);
+        var targetIdx = curIdx + delta;
+        if (targetIdx < 0) return;
+
+        // 立即清空 UI
+        _pendingIndex = targetIdx;
+        _state = null;
+        goIdle();
+
+        // 更新序号显示
+        document.getElementById('itemNum').textContent = targetIdx + 1;
+        document.getElementById('itemName').textContent = '#' + (targetIdx + 1);
+
+        // 发送控制
+        var action = delta < 0 ? 'prev_item' : 'next_item';
+        sendControl(action, { index: curIdx });
+    }
+
+    function goIdle() {
+        var subEl = document.getElementById('subtitle');
+        subEl.textContent = '等待播放…';
+        subEl.className = 'subtitle-text idle';
+        document.getElementById('subtitleArea').scrollTop = 0;
+        resetAudioBtns();
+    }
+
+    function showNoAudio(audioType) {
+        var subEl = document.getElementById('subtitle');
+        subEl.textContent = '当前没有音频';
+        subEl.className = 'subtitle-text idle';
+        document.getElementById('subtitleArea').scrollTop = 0;
+        // 按钮全部重置
+        updateOneBtn('Template', '固定介绍', false, false, 0, 0, 0);
+        updateOneBtn('Commentary', '拍品亮点', false, false, 0, 0, 0);
+    }
+
+    function showFinished(audioType) {
+        var subEl = document.getElementById('subtitle');
+        subEl.textContent = '播放完成';
+        subEl.className = 'subtitle-text idle';
+        document.getElementById('subtitleArea').scrollTop = 0;
+        if (audioType === 'template') {
+            var btn = document.getElementById('btnTemplate');
+            btn.classList.remove('playing');
+            btn.querySelector('.btn-icon-label').textContent = '▶ 固定介绍';
+            document.getElementById('cdTemplate').textContent = '已播放';
+            document.getElementById('cdTemplate').style.display = 'inline';
+            document.getElementById('fillTemplate').style.width = '100%';
+            updateOneBtn('Commentary', '拍品亮点', false, false, 0, 0, 0);
+        } else {
+            var btn = document.getElementById('btnCommentary');
+            btn.classList.remove('playing');
+            btn.querySelector('.btn-icon-label').textContent = '▶ 拍品亮点';
+            document.getElementById('cdCommentary').textContent = '已播放';
+            document.getElementById('cdCommentary').style.display = 'inline';
+            document.getElementById('fillCommentary').style.width = '100%';
+            updateOneBtn('Template', '固定介绍', false, false, 0, 0, 0);
+        }
+    }
+
+    function setConnected(ok) {
+        document.getElementById('connDot').className = 'conn-dot ' + (ok ? 'connected' : 'disconnected');
+        document.getElementById('connLabel').textContent = ok ? '拍卖看板' : '拍卖看板 (未连接)';
+    }
+
+    // ===== UI =====
+    function updateUI(msg) {
+        if (!msg) { goIdle(); document.getElementById('itemNum').textContent = '-'; document.getElementById('itemName').textContent = ''; return; }
+
+        var subEl = document.getElementById('subtitle');
+        var num = (msg.index !== undefined) ? (msg.index + 1) : '?';
+
+        // 序号（仅数字）
+        document.getElementById('itemNum').textContent = num;
+        // 标题
+        document.getElementById('itemName').textContent = '#' + num + ' ' + (msg.name || '');
+
+        // 字幕
+        if (msg.subtitle) {
+            subEl.textContent = msg.subtitle;
+            subEl.className = 'subtitle-text';
+        }
+
+        // 字幕区自动滚到顶部（新句子从顶部开始）
+        document.getElementById('subtitleArea').scrollTop = 0;
+
+        // 按钮状态
+        updateAudioBtns(msg.audio_type, (msg.playing ? msg.audio_type : null), msg.progress || 0, msg.duration || 0, msg.current_time || 0);
+    }
+
+    function resetAudioBtns() {
+        updateAudioBtns(null, null, 0, 0, 0);
+    }
+
+    function updateAudioBtns(activeType, playingType, progress, duration, currentTime) {
+        var idx = _state ? _state.index : 0;
+        var tFinished = _finishedAudio[idx + '_template'];
+        var cFinished = _finishedAudio[idx + '_commentary'];
+
+        if (tFinished) {
+            showFinishedBtn('Template', '固定介绍');
+        } else if (activeType === 'template') {
+            updateOneBtn('Template', '固定介绍', true, playingType === 'template', progress, duration, currentTime);
+        } else {
+            updateOneBtn('Template', '固定介绍', false, false, 0, 0, 0);
+        }
+
+        if (cFinished) {
+            showFinishedBtn('Commentary', '拍品亮点');
+        } else if (activeType === 'commentary') {
+            updateOneBtn('Commentary', '拍品亮点', true, playingType === 'commentary', progress, duration, currentTime);
+        } else {
+            updateOneBtn('Commentary', '拍品亮点', false, false, 0, 0, 0);
+        }
+    }
+
+    function showFinishedBtn(id, label) {
+        var btn = document.getElementById('btn' + id);
+        btn.classList.remove('playing');
+        btn.querySelector('.btn-icon-label').textContent = '▶ ' + label;
+        document.getElementById('fill' + id).style.width = '100%';
+        var cd = document.getElementById('cd' + id);
+        cd.textContent = '已播放';
+        cd.style.display = 'inline';
+    }
+
+    function updateOneBtn(id, label, isActive, isPlaying, progress, duration, currentTime) {
+        var btn = document.getElementById('btn' + id);
+        var fill = document.getElementById('fill' + id);
+        var cd = document.getElementById('cd' + id);
+
+        btn.classList.toggle('playing', isPlaying);
+        fill.style.width = (isActive ? (progress * 100) : 0) + '%';
+
+        var icon = isPlaying ? '⏸' : '▶';
+        btn.querySelector('.btn-icon-label').textContent = icon + ' ' + label;
+
+        if (isPlaying && duration > 0) {
+            var remaining = Math.max(0, Math.ceil(duration - currentTime));
+            var m = Math.floor(remaining / 60);
+            var s = remaining % 60;
+            cd.textContent = '-' + m + ':' + (s < 10 ? '0' : '') + s;
+        } else {
+            cd.textContent = '';
+        }
+        cd.style.display = (isPlaying && duration > 0) ? 'inline' : 'none';
+    }
+
+    // ===== 窗口操作 =====
+    function closeWindow() {
+        if (window.pywebview && window.pywebview.api) { window.pywebview.api.close_window(); }
+    }
+    function togglePin() {
+        _pinned = !_pinned; saveSettings({ pinned: _pinned }); syncPinUI();
+        if (window.pywebview && window.pywebview.api) { window.pywebview.api.set_on_top(_pinned); }
+    }
+    function syncPinUI() {
+        document.getElementById('btnPin').classList.toggle('pin-active', _pinned);
+        document.getElementById('togglePinSwitch').classList.toggle('on', _pinned);
+    }
+
+    // ===== 设置面板 =====
+    function toggleSettings() { document.getElementById('settingsOverlay').classList.toggle('show'); }
+    function closeSettings(e) {
+        if (e.target === document.getElementById('settingsOverlay'))
+            document.getElementById('settingsOverlay').classList.remove('show');
+    }
+    document.getElementById('inputServerUrl').addEventListener('change', function() {
+        saveSettings({ serverUrl: this.value.trim() || '' });
+        if (_ws) { _ws.close(); }
+        if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+        _wsReconnectDelay = 1000; wsConnect();
+    });
+
+    // ===== 窗口缩放（右下角手柄）=====
+    (function() {
+        var _resizing = false;
+        var _rsStartX = 0, _rsStartY = 0;
+        var _rsStartW = 0, _rsStartH = 0;
+
+        document.getElementById('resizeGrip').addEventListener('mousedown', function(e) {
+            _resizing = true;
+            _rsStartX = e.screenX;
+            _rsStartY = e.screenY;
+            _rsStartW = window.innerWidth;
+            _rsStartH = window.innerHeight;
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        document.addEventListener('mousemove', function(e) {
+            if (!_resizing) return;
+            var newW = Math.max(420, _rsStartW + (e.screenX - _rsStartX));
+            var newH = Math.max(260, _rsStartH + (e.screenY - _rsStartY));
+            if (window.pywebview && window.pywebview.api) {
+                try { window.pywebview.api.resize_window(newW, newH); } catch(ex) {}
+            }
+        });
+        document.addEventListener('mouseup', function() { _resizing = false; });
+    })();
+
+    // ===== 初始化 =====
+    applySettings(); wsConnect();
+
+    document.addEventListener('keydown', function(e) {
+        if (e.target.tagName === 'INPUT' && e.code !== 'Escape') return;
+        switch(e.code) {
+            case 'Space': e.preventDefault(); if (_state) sendControl('toggle'); break;
+            case 'ArrowLeft': navItem(-1); break;
+            case 'ArrowRight': navItem(1); break;
+            case 'KeyS': if (!e.ctrlKey && !e.metaKey) { e.preventDefault(); toggleSettings(); } break;
+            case 'Escape': closeWindow(); break;
+        }
+    });
+</script>
+</body>
+</html>

@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request, Query, Form, Depends
+from fastapi import FastAPI, Request, Query, Form, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -58,6 +58,87 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="拍品信息聚合系统 v3.0", version="3.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# ========== WebSocket 播放中继（桌面看板）==========
+
+class PlaybackRelay:
+    """双向中继：浏览器 ↔ 桌面看板"""
+    def __init__(self):
+        self.browser_conn: WebSocket | None = None
+        self.companion_conns: set[WebSocket] = set()
+        self.last_state: dict | None = None
+
+    async def handle(self, ws: WebSocket):
+        await ws.accept()
+        role = None
+        try:
+            # 握手：首条消息声明角色
+            data = await ws.receive_json()
+            if data.get("type") == "hello":
+                role = data.get("role", "companion")
+            else:
+                role = "companion"  # 默认当看板
+
+            if role == "browser":
+                self.browser_conn = ws
+                logger.info("WebSocket: 浏览器已连接")
+                # 通知所有看板：浏览器已就绪
+                dead = set()
+                for c in self.companion_conns:
+                    try:
+                        await c.send_json({"type": "browser_connected"})
+                    except Exception:
+                        dead.add(c)
+                self.companion_conns -= dead
+                # 从浏览器接收状态，广播给所有看板
+                while True:
+                    msg = await ws.receive_json()
+                    if msg.get("type") in ("playback_state", "idle", "no_audio"):
+                        self.last_state = msg
+                        dead = set()
+                        for c in self.companion_conns:
+                            try:
+                                await c.send_json(msg)
+                            except Exception:
+                                dead.add(c)
+                        self.companion_conns -= dead
+                    elif msg.get("type") == "control":
+                        pass  # 浏览器不应发 control，忽略
+            else:
+                self.companion_conns.add(ws)
+                logger.info(f"WebSocket: 看板已连接 (当前{len(self.companion_conns)}个)")
+                # 立即重放最新状态给新看板
+                if self.last_state:
+                    await ws.send_json(self.last_state)
+                # 从看板接收控制指令，转发给浏览器
+                while True:
+                    msg = await ws.receive_json()
+                    if msg.get("type") == "control" and self.browser_conn:
+                        try:
+                            await self.browser_conn.send_json(msg)
+                        except Exception:
+                            logger.warning("WebSocket: 浏览器连接已断开")
+                            self.browser_conn = None
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.warning(f"WebSocket异常: {e}")
+        finally:
+            if role == "browser":
+                self.browser_conn = None
+                logger.info("WebSocket: 浏览器已断开")
+            else:
+                self.companion_conns.discard(ws)
+                logger.info(f"WebSocket: 看板已断开 (剩余{len(self.companion_conns)}个)")
+
+
+_relay = PlaybackRelay()
+
+
+@app.websocket("/ws/playback")
+async def ws_playback(ws: WebSocket):
+    await _relay.handle(ws)
 
 
 # ========== 登录路由 ==========
@@ -400,6 +481,36 @@ async def health_check():
     return {"status": "ok", "service": "拍品信息聚合系统 v3.0"}
 
 
+@app.get("/api/cache-status")
+async def cache_status(feishu_url: str = Query(...)):
+    """自动判断缓存是否一致，一致则返回缓存数据"""
+    from modules.feishu_api import read_feishu_bitable
+    try:
+        items = await read_feishu_bitable(feishu_url)
+        if not items:
+            return {"matched": False, "reason": "飞书无数据"}
+        global_fp = compute_fingerprint(items)
+        snapshot = load_snapshot()
+        if snapshot and snapshot.get("fingerprint") == global_fp:
+            # 缓存匹配，返回全量数据
+            snap_items = snapshot.get("items", [])
+            for it in snap_items:
+                it["_cached"] = True
+                it["_changed"] = False
+                idx_val = it.get("index", 0)
+                it["_has_template_audio"] = has_audio(idx_val, "template")
+                it["_has_commentary_audio"] = has_audio(idx_val, "commentary")
+            return {
+                "matched": True,
+                "total": len(snap_items),
+                "items": snap_items,
+                "timestamp": snapshot.get("timestamp", ""),
+            }
+        return {"matched": False, "reason": "数据已变更"}
+    except Exception as e:
+        return {"matched": False, "reason": str(e)}
+
+
 @app.get("/api/cached-audio")
 async def cached_audio(index: int = Query(...), audio_type: str = "commentary"):
     """获取缓存的音频文件"""
@@ -427,6 +538,61 @@ async def batch_covers(codes: str = Query(...)):
         return {"covers": {}}
     result = await fetch_deal_covers_batch(ids[:20])
     return {"covers": result}
+
+
+class RevenuePredictRequest(BaseModel):
+    items: list[dict] = []
+    session_date: str = ""
+
+
+@app.post("/api/predict/revenue")
+async def predict_revenue(req: RevenuePredictRequest):
+    """预估本场拍卖成交额区间（指纹缓存: 拍品不变则秒返）"""
+    if not req.items:
+        return JSONResponse({"error": "物品列表为空"}, status_code=400)
+
+    try:
+        from modules.snapshot_cache import get_cached_prediction, save_prediction
+
+        # 先查缓存
+        cached = get_cached_prediction(req.items)
+        if cached:
+            cached["_cached"] = True
+            return cached
+
+        # 缓存未命中，重新预估
+        from modules.revenue_predictor import predict_session_revenue
+        result = await predict_session_revenue(
+            items=req.items,
+            session_date=req.session_date,
+        )
+        result["_cached"] = False
+        save_prediction(req.items, result)
+        return result
+    except Exception as e:
+        logger.exception(f"预估失败: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/admin/competitor/status")
+async def competitor_status():
+    """竞品数据状态查询"""
+    try:
+        from modules.competitor_import import get_status
+        return get_status()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/admin/competitor/refresh")
+async def competitor_refresh():
+    """触发竞品数据增量导入"""
+    try:
+        from modules.competitor_import import refresh
+        result = refresh()
+        return result
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 class RefreshItemRequest(BaseModel):
@@ -591,6 +757,21 @@ async def cache_update_covers(request: Request):
     return {"ok": False}
 
 
+@app.post("/api/cache/clear-audio")
+async def cache_clear_audio(request: Request):
+    """清除指定拍品的缓存音频（编辑文案后调用）"""
+    from pathlib import Path as _Path
+    body = await request.json()
+    idx = body.get("index", -1)
+    audio_type = body.get("audio_type", "commentary")
+    if idx >= 0:
+        audio_path = _Path("cache/audio") / f"{idx}{'_tpl' if audio_type == 'template' else ''}.mp3"
+        if audio_path.exists():
+            audio_path.unlink()
+        return {"ok": True}
+    return {"ok": False}
+
+
 @app.post("/api/refresh/market")
 async def refresh_market(req: RefreshItemRequest):
     """单独刷新某件拍品的成交行情"""
@@ -603,7 +784,7 @@ async def refresh_market(req: RefreshItemRequest):
 
 
 @app.get("/api/analyze-all")
-async def analyze_all(feishu_url: str = Query(...)):
+async def analyze_all(feishu_url: str = Query(...), force: bool = Query(False)):
     """
     SSE 端点：读取飞书多维表格全部拍品，逐条搜索参考资料，实时推送结果
 
@@ -643,7 +824,7 @@ async def analyze_all(feishu_url: str = Query(...)):
 
             # 增量缓存：按 code 逐条对比
             from modules.snapshot_cache import item_fingerprint, build_code_index, delete_audio_for_code
-            snapshot = load_snapshot()
+            snapshot = load_snapshot() if not force else None
             snap_index = build_code_index(snapshot) if snapshot else {}
 
             # 给每条 item 分配新 index，标记复用或重分析
@@ -662,7 +843,8 @@ async def analyze_all(feishu_url: str = Query(...)):
                     old_item["_cached"] = True
                     old_item["_changed"] = False
                     idx_val = new_idx
-                    old_item["_has_audio"] = has_audio(idx_val) or has_audio(idx_val, "template")
+                    old_item["_has_template_audio"] = has_audio(idx_val, "template")
+                    old_item["_has_commentary_audio"] = has_audio(idx_val, "commentary")
                     cached_results.append(old_item)
                     items_for_snapshot[new_idx] = old_item
                 else:
@@ -751,23 +933,41 @@ async def analyze_all(feishu_url: str = Query(...)):
                         "obsidian_kiln_url": pd["obs_url"],
                     }
 
-                results = []
+                # 用 asyncio.Queue 确保每个结果完成后立即推送（不等整批）
+                queue = asyncio.Queue()
+                chunk_count = len(chunk)
+
                 async def run(pd):
-                    r = await call_ai(pd)
-                    results.append(r)
+                    try:
+                        r = await call_ai(pd)
+                    except Exception as e:
+                        logger.error(f"AI 解说稿生成失败 (index={pd.get('idx', '?')}): {e}")
+                        r = {
+                            "index": pd["idx"],
+                            "name": pd["item"].get("name", ""),
+                            "kiln": pd["item"].get("kiln", ""),
+                            "commentary": "",
+                            "template_text": "",
+                            "market_analysis": pd.get("market", ""),
+                            "xiaochashu_records": pd.get("records", [])[:10],
+                            "obsidian_kiln_url": pd.get("obs_url", ""),
+                            "_cached": False, "_changed": True,
+                        }
+                    await queue.put(r)
 
-                async with anyio.create_task_group() as tg:
-                    for pd in chunk:
-                        tg.start_soon(run, pd)
-
-                for r in results:
+                tasks = [asyncio.create_task(run(pd)) for pd in chunk]
+                done_count = 0
+                while done_count < chunk_count:
+                    r = await queue.get()
+                    done_count += 1
                     r["_cached"] = False
                     r["_changed"] = True
                     all_results.append(r)
-                    # 更新 items_for_snapshot
                     idx = r.get("index", -1)
                     if 0 <= idx < len(items_for_snapshot):
                         r["_fp"] = item_fingerprint(items[idx]) if idx < len(items) else ""
+                        r["_has_template_audio"] = has_audio(idx, "template")
+                        r["_has_commentary_audio"] = has_audio(idx, "commentary")
                         items_for_snapshot[idx] = r
                     yield f"data: {json.dumps({'type': 'result', 'data': r}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.1)
@@ -777,6 +977,12 @@ async def analyze_all(feishu_url: str = Query(...)):
             if final_snapshot:
                 save_snapshot(final_snapshot, compute_fingerprint(items))
                 logger.info(f"快照已保存: {len(final_snapshot)} 条")
+            # force 分析后清除预估缓存，确保前端重新评估
+            if force:
+                pred_file = Path("cache/prediction_cache.json")
+                if pred_file.exists():
+                    pred_file.unlink()
+                    logger.info("已清除预估缓存")
 
             yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
 

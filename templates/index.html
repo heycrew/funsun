@@ -20,11 +20,15 @@
         <section class="input-section">
             <div class="input-group" style="justify-content: center;">
                 <button id="analyzeBtn" onclick="startAnalyze()">
-                    <span id="btnText">开始分析</span>
+                    <span id="btnText">强制更新</span>
                     <span id="btnLoading" class="hidden">分析中...</span>
                 </button>
                 <button id="stopBtn" class="stop-btn hidden" onclick="stopAnalyze()">停止分析</button>
+                <button id="pipBtn" class="pip-btn" onclick="openPipWindow()" title="打开桌面看板 (PiP始终置顶)">🖥 桌面看板</button>
                 <a id="adminLink" href="/admin" style="display:none;padding:10px 18px;background:#2c3e50;color:#fff;border-radius:8px;text-decoration:none;font-size:0.9em;font-weight:600;white-space:nowrap">⚙ 管理后台</a>
+                <span style="flex:1"></span>
+                <span id="userDisplay" style="color:#888;font-size:0.85em;white-space:nowrap"></span>
+                <a id="logoutLink" href="/api/logout" style="color:#e74c3c;font-size:0.8em;text-decoration:none;white-space:nowrap;margin-left:8px">退出</a>
             </div>
         </section>
 
@@ -45,6 +49,9 @@
                 <div class="summary-kilns">
                     <h3>窑口分布</h3>
                     <div id="kilnBars"></div>
+                    <div id="kilnToggle" style="display:none;text-align:center;margin-top:6px">
+                        <button class="kiln-toggle-btn" onclick="toggleKilnBars()" id="kilnToggleBtn">查看更多</button>
+                    </div>
                 </div>
             </div>
         </section>
@@ -52,6 +59,18 @@
         <section id="resultSection" class="result-section hidden">
             <div class="card">
                 <h2 class="card-title">拍品列表 <span class="badge" id="totalBadge">0</span></h2>
+                <div class="batch-bar" id="batchBar" style="display:none;align-items:center;gap:10px;padding:8px 0;flex-wrap:wrap">
+                    <select class="voice-select" id="globalVoice">
+                        <option value="zh_male_wennuanahu_uranus_bigtts">AI音色(系统)</option>
+                        <option value="S_2fqs4pf62">志波(复刻)</option>
+                        <option value="S_1fqs4pf62">锦卉(复刻)</option>
+                        <option value="S_0fqs4pf62">杨雪(复刻)</option>
+                        <option value="S_Zeqs4pf62">培文(复刻)</option>
+                    </select>
+                    <button class="batch-btn" onclick="batchGenerate('template')" id="batchTemplateBtn">📋 批量生成固定介绍</button>
+                    <button class="batch-btn" onclick="batchGenerate('commentary')" id="batchCommentaryBtn">🎙 批量生成拍品亮点</button>
+                    <span class="batch-progress" id="batchProgress" style="display:none"></span>
+                </div>
                 <div class="table-wrap">
                     <table class="data-table" id="mainTable">
                         <thead>
@@ -62,7 +81,7 @@
                                 <th style="width:9em">款识</th>
                                 <th style="width:7em">起拍价</th>
                                 <th style="width:7em">参考价</th>
-                                <th style="width:80px">状态</th>
+                                <th style="width:90px">音频状态</th>
                             </tr>
                         </thead>
                         <tbody id="tableBody"></tbody>
@@ -80,6 +99,209 @@
         let doneCount = 0;
         let abortController = null;
         let audioState = {};
+        // ===== 桌面看板 WebSocket 连接 =====
+        let _ws = null;
+        let _wsReconnectTimer = null;
+        let _wsReconnectDelay = 3000;
+        let _wsLastSend = 0;
+        let _wsActiveIdx = -1;
+        let _wsActiveType = 'commentary';
+
+        function wsConnect() {
+            if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return;
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var url = proto + '//' + location.host + '/ws/playback';
+            _ws = new WebSocket(url);
+            _ws.onopen = function() {
+                _ws.send(JSON.stringify({type:'hello',role:'browser'}));
+                _wsReconnectDelay = 3000;
+                console.log('WebSocket 已连接');
+            };
+            _ws.onmessage = function(e) {
+                try {
+                    var msg = JSON.parse(e.data);
+                    wsHandleControl(msg);
+                    // 转发给 PiP 看板：playback_state / idle / no_audio
+                    if (msg.type === 'playback_state' || msg.type === 'idle' || msg.type === 'no_audio') {
+                        sendToPip(msg);
+                    }
+                } catch(err) { console.error('WS消息解析失败:', err); }
+            };
+            _ws.onclose = function() {
+                _ws = null;
+                if (_wsReconnectTimer) clearTimeout(_wsReconnectTimer);
+                _wsReconnectTimer = setTimeout(function() {
+                    wsConnect();
+                    _wsReconnectDelay = Math.min(_wsReconnectDelay * 2, 30000);
+                }, _wsReconnectDelay);
+            };
+            _ws.onerror = function() { _ws.close(); };
+        }
+
+        function wsSend(msg) {
+            if (_ws && _ws.readyState === WebSocket.OPEN) {
+                _ws.send(JSON.stringify(msg));
+            }
+            // 同时转发给 PiP 看板（WebSocket 服务端不会回显给自己的消息）
+            if (msg.type === 'playback_state' || msg.type === 'idle' || msg.type === 'no_audio') {
+                sendToPip(msg);
+            }
+        }
+
+        function wsHandleControl(msg) {
+            if (msg.type !== 'control') return;
+            var idx = msg.index;
+            var type = msg.audio_type || 'commentary';
+            var key = getAudioKey(idx, type);
+            var st = audioState[key];
+            switch (msg.action) {
+                case 'play':
+                case 'pause':
+                case 'toggle':
+                case 'seek':
+                    if (!st) {
+                        // 没有对应音频 → 回传 no_audio
+                        wsSend({type:'no_audio', index:idx, audio_type:type});
+                        return;
+                    }
+                    break;
+            }
+            switch (msg.action) {
+                case 'play':
+                    // 停止同拍品其他正在播放的音频，并重置进度
+                    Object.keys(audioState).forEach(function(k) {
+                        if (k !== key && audioState[k] && audioState[k].playing && audioState[k].idx === idx) {
+                            audioState[k].audio.pause();
+                            audioState[k].audio.currentTime = 0;
+                            audioState[k].playing = false;
+                            renderDualControls(audioState[k].idx, audioState[k].type);
+                        }
+                    });
+                    st.audio.play(); st.playing = true; renderDualControls(idx, type);
+                    _wsLastSend = 0; updateDualProgress(idx, type); break;
+                case 'pause':
+                    st.audio.pause(); st.playing = false; renderDualControls(idx, type);
+                    _wsLastSend = 0; updateDualProgress(idx, type); break;
+                case 'toggle':
+                    toggleDualAudio(idx, type); break;
+                case 'seek':
+                    if (msg.position !== undefined && st.audio.duration) {
+                        st.audio.currentTime = msg.position;
+                        updateDualProgress(idx, type);
+                    }
+                    break;
+                case 'select_item':
+                    // 看板连接后自动展开指定拍品
+                    var targetIdx = msg.index;
+                    if (targetIdx !== undefined && allItems[targetIdx]) {
+                        if (expandedRow !== null && expandedRow !== targetIdx) {
+                            toggleExpand(expandedRow);
+                        }
+                        if (expandedRow !== targetIdx) {
+                            toggleExpand(targetIdx);
+                        }
+                        // 立即推送拍品基础信息给看板（不等音频播放）
+                        var info = resultsMap[targetIdx] || allItems[targetIdx];
+                        wsSend({
+                            type: 'playback_state',
+                            index: targetIdx,
+                            name: (info && info.name) || allItems[targetIdx].name || '',
+                            audio_type: 'commentary',
+                            playing: false,
+                            current_time: 0,
+                            duration: 0,
+                            subtitle: '',
+                            progress: 0
+                        });
+                    }
+                    break;
+                case 'prev_item':
+                    if (expandedRow !== null && expandedRow > 0 && allItems[expandedRow - 1]) {
+                        toggleExpand(expandedRow - 1);
+                    }
+                    break;
+                case 'next_item':
+                    if (expandedRow !== null && expandedRow < allItems.length - 1 && allItems[expandedRow + 1]) {
+                        toggleExpand(expandedRow + 1);
+                    }
+                    break;
+            }
+        }
+
+        // 页面加载时连接
+        wsConnect();
+
+        // ===== 桌面看板 (Picture-in-Picture) =====
+        var _pipWin = null;
+
+        function openPipWindow() {
+            if (_pipWin) {
+                _pipWin.close();
+                _pipWin = null;
+                document.getElementById('pipBtn').classList.remove('pip-active');
+                return;
+            }
+            if (!('documentPictureInPicture' in window)) {
+                alert('您的浏览器不支持画中画看板，请使用 Chrome 116+ 或 Edge 116+');
+                return;
+            }
+            document.getElementById('pipBtn').classList.add('pip-active');
+            documentPictureInPicture.requestWindow({ width: 520, height: 340 })
+                .then(function(pipWin) {
+                    _pipWin = pipWin;
+                    pipWin.document.title = '拍卖看板';
+                    pipWin.document.head.innerHTML = '<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><style>' + getPipCSS() + '</style>';
+                    pipWin.document.body.innerHTML = getPipHTML();
+                    // 注入 JS（用 script 标签在 PiP 窗口执行）
+                    var script = pipWin.document.createElement('script');
+                    script.textContent = getPipJS();
+                    pipWin.document.body.appendChild(script);
+
+                    // 监听 PiP 窗口关闭
+                    pipWin.addEventListener('pagehide', function() {
+                        _pipWin = null;
+                        document.getElementById('pipBtn').classList.remove('pip-active');
+                    });
+
+                    // 延迟等 PiP 脚本就绪后再推送状态
+                    setTimeout(function() { sendCurrentStateToPip(); }, 300);
+                })
+                .catch(function(err) {
+                    console.error('PiP 打开失败:', err);
+                    _pipWin = null;
+                    document.getElementById('pipBtn').classList.remove('pip-active');
+                });
+        }
+
+        function sendToPip(msg) {
+            if (_pipWin) {
+                try { _pipWin.postMessage(msg, '*'); } catch(e) {}
+            }
+        }
+
+        function sendCurrentStateToPip() {
+            if (!_pipWin) return;
+            // 找到当前展开的拍品
+            if (expandedRow !== null && resultsMap[expandedRow]) {
+                var d = resultsMap[expandedRow];
+                sendToPip({ type:'playback_state', index:expandedRow, name:d.name||'', audio_type:'commentary', playing:false, current_time:0, duration:0, subtitle:'', progress:0 });
+            } else if (allItems.length > 0) {
+                sendToPip({ type:'playback_state', index:0, name:allItems[0].name||'', audio_type:'commentary', playing:false, current_time:0, duration:0, subtitle:'', progress:0 });
+            }
+        }
+
+        // 主页面 ↔ PiP 看板：通过 postMessage 直接通信
+        window.addEventListener('message', function(e) {
+            if (!e.data) return;
+            if (e.data.from !== 'auction_pip') return; // 只处理来自 PiP 的消息
+            if (e.data.type === 'control') {
+                wsHandleControl(e.data);
+            } else if (e.data.type === 'select_item') {
+                wsHandleControl(e.data);
+            } else if (e.data.type === 'pip_ready') {
+                sendCurrentStateToPip();
+            }
+        });
 
         async function fetchCoverImage(idx, code) {
             try {
@@ -144,6 +366,18 @@
 
         async function startAnalyze() {
             const url = document.getElementById('feishuUrl').value.trim();
+            // 检查缓存是否一致，一致则弹窗确认
+            document.getElementById('btnText').textContent = '⏳ 检查中...';
+            try {
+                var checkResp = await fetch('/api/cache-status?feishu_url=' + encodeURIComponent(url));
+                var checkJson = await checkResp.json();
+                document.getElementById('btnText').textContent = allItems.length > 0 ? '强制更新' : '开始分析';
+                if (checkJson.matched) {
+                    var confirmed = confirm('当前拍品清单没有任何变动，是否要重新分析？\n\n点击「确定」强制更新，「取消」则保留当前数据。');
+                    if (!confirmed) return;
+                }
+            } catch(e) { document.getElementById('btnText').textContent = allItems.length > 0 ? '强制更新' : '开始分析'; }
+
             hideError();
             document.getElementById('resultSection').classList.add('hidden');
             showProgress();
@@ -152,11 +386,12 @@
             resultsMap = {};
             expandedRow = null;
             doneCount = 0;
+            document.getElementById('batchBar').style.display = 'none';
 
             abortController = new AbortController();
 
             try {
-                const resp = await fetch(`/api/analyze-all?feishu_url=${encodeURIComponent(url)}`, {
+                const resp = await fetch(`/api/analyze-all?feishu_url=${encodeURIComponent(url)}&force=true`, {
                     signal: abortController.signal
                 });
                 const reader = resp.body.getReader();
@@ -218,6 +453,7 @@
                     allItems = msg.items;
                     document.getElementById('totalBadge').textContent = totalCount;
                     document.getElementById('resultSection').classList.remove('hidden');
+                    document.getElementById('batchBar').style.display = 'flex';
                     buildTable();
                     buildSummary(msg.items);
                     updateProgress(0, msg.cached ? `缓存命中 ${totalCount}条` : `0/${totalCount}`);
@@ -248,6 +484,9 @@
                 case 'done':
                     updateProgress(100, `完成 ${doneCount}/${totalCount}`);
                     setTimeout(() => hideProgress(), 1500);
+                    document.getElementById('batchBar').style.display = 'flex';
+                    // 重新触发预估（此时 resultsMap 已完整）
+                    setTimeout(runPrediction, 300);
                     break;
 
                 case 'error':
@@ -273,16 +512,33 @@
             document.getElementById('summaryStats').innerHTML =
                 '<div class="summary-stat"><span class="val">' + total + '</span><span class="lbl">拍品总数</span></div>' +
                 '<div class="summary-stat"><span class="val">' + uniqueKilns + '</span><span class="lbl">窑口数量</span></div>' +
-                '<div class="summary-stat"><span class="val">¥' + totalPrice.toLocaleString() + '</span><span class="lbl">起拍价总和</span></div>';
+                '<div class="summary-stat"><span class="val">¥' + totalPrice.toLocaleString() + '</span><span class="lbl">起拍价总和</span></div>' +
+                '<div class="summary-stat predict-stat" id="predictCard"><span class="val predict-loading">⏳</span><span class="lbl">专场成交预估</span></div>';
 
-            // Kiln bars
+            // Kiln bars (默认显示前3，超出隐藏)
+            setTimeout(runPrediction, 500);
+            var sortedKilns = Object.keys(kilns).sort(function(a,b){return kilns[b]-kilns[a];});
             var kb = '';
-            Object.keys(kilns).sort(function(a,b){return kilns[b]-kilns[a];}).forEach(function(k){
+            sortedKilns.forEach(function(k, i){
                 var pct = (kilns[k] / total * 100).toFixed(1);
-                kb += '<div class="kiln-row"><span class="kname">' + k + '</span><span class="kbar-wrap"><span class="kbar" style="width:' + pct + '%"></span></span><span class="kinfo">' + kilns[k] + ' 件 · ' + pct + '%</span></div>';
+                var extraCls = (i >= 3) ? ' kiln-hidden' : '';
+                kb += '<div class="kiln-row' + extraCls + '"><span class="kname">' + k + '</span><span class="kbar-wrap"><span class="kbar" style="width:' + pct + '%"></span></span><span class="kinfo">' + kilns[k] + ' 件 · ' + pct + '%</span></div>';
             });
             document.getElementById('kilnBars').innerHTML = kb;
+            if (sortedKilns.length > 3) {
+                document.getElementById('kilnToggle').style.display = 'block';
+                document.getElementById('kilnToggleBtn').textContent = '查看更多';
+            } else {
+                document.getElementById('kilnToggle').style.display = 'none';
+            }
             document.getElementById('summarySection').classList.remove('hidden');
+        }
+
+        function toggleKilnBars() {
+            var kilnBars = document.getElementById('kilnBars');
+            var btn = document.getElementById('kilnToggleBtn');
+            var expanded = kilnBars.classList.toggle('kiln-expanded');
+            btn.textContent = expanded ? '收起' : '查看更多';
         }
 
         function buildTable() {
@@ -299,10 +555,10 @@
                     <td class="name-cell${item._changed ? ' name-changed' : ''}">${esc(item.name || '-')}</td>
                     <td>${esc(item.kiln || '-')}</td>
                     <td>${esc(item.inscription || '-')}</td>
-                    <td class="price-cell">${esc(item.starting_price || '-')}</td>
-                    <td class="price-cell">${esc(item.estimate || '-')}</td>
+                    <td class="price-cell start-price">${esc(item.starting_price || '-')}</td>
+                    <td class="price-cell est-price">${esc(item.estimate || '-')}</td>
                     <td class="action-cell" id="action-${i}">
-                        <span class="status-tag pending">等待中</span>
+                        <span class="audio-status" id="astatus-${i}" style="color:#888;font-weight:700;font-size:0.85em">—</span>
                     </td>`;
                 tbody.appendChild(tr);
 
@@ -321,9 +577,25 @@
             if (status === 'searching') {
                 cell.innerHTML = '<span class="status-tag searching">分析中</span>';
             } else if (status === 'done') {
-                let label = (expandedRow === idx) ? '收起' : '展开';
-                let cls = (expandedRow === idx) ? 'expand-btn active' : 'expand-btn';
-                cell.innerHTML = `<button class=\"${cls}\" onclick=\"event.stopPropagation();toggleExpand(${idx})\">${label}</button>`;
+                // 重建 astatus 元素（searching 阶段 innerHTML 替换掉了原来的元素）
+                cell.innerHTML = '<span class="audio-status" id="astatus-' + idx + '" style="color:#888;font-weight:700;font-size:0.85em">—</span>';
+                updateAudioStatus(idx);
+            }
+        }
+
+        function updateAudioStatus(idx) {
+            var d = resultsMap[idx];
+            if (!d) return;
+            var hasT = d._has_template_audio;
+            var hasC = d._has_commentary_audio;
+            if (hasT === undefined) hasT = false;
+            if (hasC === undefined) hasC = false;
+            var count = (hasT ? 1 : 0) + (hasC ? 1 : 0);
+            var color = (count === 2) ? '#27ae60' : '#888';
+            var el = document.getElementById('astatus-' + idx);
+            if (el) {
+                el.textContent = count + '/2';
+                el.style.color = color;
             }
         }
 
@@ -341,18 +613,11 @@
                 });
                 // 收起
                 document.getElementById(`expand-${idx}`).classList.add('hidden');
-                document.getElementById(`action-${idx}`).innerHTML =
-                    '<button class="expand-btn" onclick="event.stopPropagation();toggleExpand(' + idx + ')">展开</button>';
                 expandedRow = null;
             } else {
                 // 收起旧的
                 if (expandedRow !== null) {
                     document.getElementById(`expand-${expandedRow}`).classList.add('hidden');
-                    const oldData = resultsMap[expandedRow];
-                    if (oldData) {
-                        document.getElementById(`action-${expandedRow}`).innerHTML =
-                            '<button class="expand-btn" onclick="event.stopPropagation();toggleExpand(' + expandedRow + ')">展开</button>';
-                    }
                 }
                 // 停止所有正在播放的音频
                 Object.keys(audioState).forEach(function(k) {
@@ -364,10 +629,20 @@
                 // 展开新的
                 renderExpandContent(idx, data);
                 document.getElementById(`expand-${idx}`).classList.remove('hidden');
-                document.getElementById(`action-${idx}`).innerHTML =
-                    '<button class="expand-btn active" onclick="event.stopPropagation();toggleExpand(' + idx + ')">收起</button>';
                 expandedRow = idx;
                 document.getElementById(`expand-${idx}`).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                // 通知看板当前展开的拍品
+                wsSend({
+                    type: 'playback_state',
+                    index: idx,
+                    name: data.name || '',
+                    audio_type: 'commentary',
+                    playing: false,
+                    current_time: 0,
+                    duration: 0,
+                    subtitle: '',
+                    progress: 0
+                });
                 // 检查并加载缓存的音频
                 loadCachedAudioIfExists(idx, 'template');
                 loadCachedAudioIfExists(idx, 'commentary');
@@ -473,13 +748,21 @@
             var filename = (idx+1)+'_'+itemName+'_'+dateStr+'_'+getAudioLabel(type)+'_缓存.mp3'.replace(/[\\/:*?\"<>|]/g,'_');
             audioState[key] = {audio:audio, url:url, playing:false, filename:filename, sentenceTimings:sts, type:type, idx:idx};
             audio.addEventListener('timeupdate', function(){ updateDualProgress(idx,type); });
-            audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); });
+            audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); wsSend({type:'idle'}); });
+            audio.addEventListener('play', function(){ _wsLastSend=0; updateDualProgress(idx,type); });
             var prefix = type === 'template' ? 'tpl-' : '';
             var player = document.getElementById(prefix + 'audioPlayer-' + idx);
             if (player) { player.style.display = 'flex'; player.innerHTML = '<div class=\"audio-controls\" id=\"' + prefix + 'audioControls-' + idx + '\"></div>'; }
             var ttsBtn = document.getElementById(prefix + 'ttsBtn-' + idx);
             if (ttsBtn) ttsBtn.style.display = 'none';
             renderDualControls(idx, type);
+            // 更新列表音频状态
+            var d = resultsMap[idx];
+            if (d) {
+                if (type === 'template') d._has_template_audio = true;
+                else d._has_commentary_audio = true;
+                updateAudioStatus(idx);
+            }
         }
 
         function getAudioText(data, type) {
@@ -529,7 +812,8 @@
                 var sts = rawS.map(function(s){var st=ca/tc;ca+=s.length;return{text:s,start:st,end:ca/tc}});
                 audioState[key] = {audio:audio, url:url, playing:false, filename:filename, sentenceTimings:sts, type:type, idx:idx};
                 audio.addEventListener('timeupdate', function(){ updateDualProgress(idx,type); });
-                audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); });
+                audio.addEventListener('ended', function(){ if(audioState[key])audioState[key].playing=false; renderDualControls(idx,type); wsSend({type:'idle'}); });
+                audio.addEventListener('play', function(){ _wsLastSend=0; updateDualProgress(idx,type); });
                 audio.addEventListener('loadedmetadata', function(){ renderDualControls(idx,type); });
                 await new Promise(function(resolve){ audio.addEventListener('canplay', resolve, {once:true}); setTimeout(resolve,5000); });
                 if (player) player.innerHTML = '<div class=\"audio-controls\" id=\"'+prefix+'audioControls-'+idx+'\"></div>';
@@ -538,6 +822,13 @@
                 audioState[key].playing = true;
                 audio.play().catch(function(){});
                 renderDualControls(idx, type);
+                // 更新列表音频状态
+                var d = resultsMap[idx];
+                if (d) {
+                    if (type === 'template') d._has_template_audio = true;
+                    else d._has_commentary_audio = true;
+                    updateAudioStatus(idx);
+                }
             } catch(err) {
                 console.error(err);
                 if (player) player.innerHTML = '<span class=\"tts-status\" style=\"color:red\">❌ 生成失败</span>';
@@ -568,20 +859,45 @@
             var timeEl = document.querySelector('#' + prefix + 'audioControls-' + idx + ' .audio-time');
             if (slider) slider.value = pct;
             if (timeEl) timeEl.textContent = formatTime(cur) + ' / ' + formatTime(dur);
-            // 字幕：仅AI解说稿有
-            if (type === 'commentary') {
-                var subtitleEl = document.getElementById('subtitle-' + idx);
-                if (subtitleEl && st.sentenceTimings && st.sentenceTimings.length > 0 && dur > 0) {
-                    subtitleEl.style.display = 'block';
-                    var progress = cur / dur;
-                    var found = st.sentenceTimings[0].text;
-                    for (var i = 0; i < st.sentenceTimings.length; i++) {
-                        var t = st.sentenceTimings[i];
-                        if (progress >= t.start && progress < t.end) { found = t.text; break; }
-                        if (progress >= t.end) found = t.text;
-                    }
-                    subtitleEl.innerHTML = '<span class=\"sub-active\">' + esc(found) + '</span>';
+            var subtitle = '';
+            // 字幕：所有音频类型都提取当前句子
+            if (st.sentenceTimings && st.sentenceTimings.length > 0 && dur > 0) {
+                if (type === 'commentary') {
+                    var subtitleEl = document.getElementById('subtitle-' + idx);
+                    if (subtitleEl) subtitleEl.style.display = 'block';
                 }
+                var progress = cur / dur;
+                var found = st.sentenceTimings[0].text;
+                for (var i = 0; i < st.sentenceTimings.length; i++) {
+                    var t = st.sentenceTimings[i];
+                    if (progress >= t.start && progress < t.end) { found = t.text; break; }
+                    if (progress >= t.end) found = t.text;
+                }
+                subtitle = found;
+                if (type === 'commentary') {
+                    var se = document.getElementById('subtitle-' + idx);
+                    if (se) se.innerHTML = '<span class=\"sub-active\">' + esc(found) + '</span>';
+                }
+            }
+            // WebSocket 推送（节流 250ms）
+            var now = Date.now();
+            if (now - _wsLastSend >= 250) {
+                _wsLastSend = now;
+                _wsActiveIdx = idx;
+                _wsActiveType = type;
+                var data = resultsMap[idx] || {};
+                var wsMsg = {
+                    type: 'playback_state',
+                    index: idx,
+                    name: data.name || '',
+                    audio_type: type,
+                    playing: st.playing || false,
+                    current_time: cur,
+                    duration: dur,
+                    subtitle: subtitle,
+                    progress: dur > 0 ? (cur / dur) : 0
+                };
+                wsSend(wsMsg);
             }
         }
 
@@ -593,6 +909,9 @@
                 st.audio.play(); st.playing = true;
             }
             renderDualControls(idx, type);
+            // 立即推送状态
+            _wsLastSend = 0;
+            updateDualProgress(idx, type);
         }
 
         function seekDualAudio(idx, type, pct) {
@@ -640,13 +959,15 @@
                     fetch('/api/cache/update-commentary', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,commentary:data.commentary,template_text:fresh})}).catch(function(){});
                 } catch(e) { console.error(e); }
             }
-            // 重置音频
+            // 清除模板音频 + 更新状态
             var key = idx + '_tpl';
             if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
             var p = document.getElementById('tpl-audioPlayer-' + idx); if (p) p.style.display = 'none';
             var b = document.getElementById('tpl-ttsBtn-' + idx);
             if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
             if (btn) { btn.textContent = '🔄 生成文案'; btn.disabled = false; }
+            fetch('/api/cache/clear-audio', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,audio_type:'template'})}).catch(function(){});
+            if (resultsMap[idx]) { resultsMap[idx]._has_template_audio = false; updateAudioStatus(idx); }
         }
 
         async function editTemplateText(idx) {
@@ -664,12 +985,14 @@
                 editEl.classList.add('hidden'); saveBtn.classList.add('hidden');
                 textEl.classList.remove('hidden');
                 if (editBtn) editBtn.textContent = '✎';
-                // 重置模板音频
+                // 清除模板音频 + 更新状态
                 var key = idx + '_tpl';
                 if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
                 var p = document.getElementById('tpl-audioPlayer-' + idx); if (p) p.style.display = 'none';
                 var b = document.getElementById('tpl-ttsBtn-' + idx);
                 if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
+                fetch('/api/cache/clear-audio', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,audio_type:'template'})}).catch(function(){});
+                if (resultsMap[idx]) { resultsMap[idx]._has_template_audio = false; updateAudioStatus(idx); }
             } else {
                 editEl.value = (resultsMap[idx] && resultsMap[idx].template_text) || getAudioText(resultsMap[idx], 'template');
                 editEl.classList.remove('hidden'); saveBtn.classList.remove('hidden');
@@ -701,14 +1024,17 @@
                 saveBtn.classList.add('hidden');
                 textEl.classList.remove('hidden');
                 if (editBtn) editBtn.textContent = '编辑';
-                // 重置双音频状态
+                // 清除双音频 + 更新状态
                 ['', 'tpl-'].forEach(function(pref){
+                    var atype = pref === 'tpl-' ? 'template' : 'commentary';
                     var key = pref === 'tpl-' ? (idx + '_tpl') : ('' + idx);
                     if (audioState[key]) { audioState[key].audio.pause(); URL.revokeObjectURL(audioState[key].url); delete audioState[key]; }
                     var p = document.getElementById(pref + 'audioPlayer-' + idx); if (p) p.style.display = 'none';
                     var b = document.getElementById(pref + 'ttsBtn-' + idx);
                     if (b) { b.style.display = 'block'; b.textContent = '🔊 生成语音'; b.disabled = false; }
+                    fetch('/api/cache/clear-audio', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,audio_type:atype})}).catch(function(){});
                 });
+                if (resultsMap[idx]) { resultsMap[idx]._has_template_audio = false; resultsMap[idx]._has_commentary_audio = false; updateAudioStatus(idx); }
             } else {
                 // 进入编辑模式
                 editEl.value = data.commentary || '';
@@ -883,7 +1209,325 @@
         }
         fetch('/api/user-info').then(r=>r.json()).then(d=>{
             if(d.role==='admin') document.getElementById('adminLink').style.display='inline';
+            document.getElementById('userDisplay').textContent = '👤 ' + (d.username || '');
         });
+
+        async function runPrediction() {
+            var card = document.getElementById('predictCard');
+            card.querySelector('.val').textContent = '⏳';
+
+            var items = [];
+            for (var i = 0; i < allItems.length; i++) {
+                var d = resultsMap[i];
+                if (d) {
+                    items.push({
+                        name: d.name || '', kiln: d.kiln || '', code: d.code || '',
+                        starting_price: d.starting_price || '', estimate: d.estimate || '',
+                        era: d.era || '', material: d.material || '', size: d.size || '',
+                        capacity: d.capacity || '', condition: d.condition || '',
+                        inscription: d.inscription || '', description: d.description || ''
+                    });
+                } else {
+                    var s = allItems[i];
+                    items.push({
+                        name: s.name || '', kiln: s.kiln || '', code: s.code || '',
+                        starting_price: s.starting_price || '', estimate: s.estimate || ''
+                    });
+                }
+            }
+
+            if (items.length === 0) return;
+
+            try {
+                var resp = await fetch('/api/predict/revenue', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({items: items, session_date: ''})
+                });
+                var json = await resp.json();
+                if (json.error) {
+                    card.innerHTML = '<span class="val" style="color:#e74c3c">—</span><span class="lbl">' + esc(json.error) + '</span>';
+                    return;
+                }
+                var fmt = function(n) { return (n || 0).toLocaleString(); };
+                card.querySelector('.val').className = 'val predict-val';
+                card.querySelector('.val').textContent = '¥' + fmt(json.low);
+                // 移动端长按显示
+                var valEl = card.querySelector('.val');
+                var pressTimer;
+                valEl.addEventListener('touchstart', function() { pressTimer = setTimeout(function() { valEl.classList.add('reveal'); }, 500); });
+                valEl.addEventListener('touchend', function() { clearTimeout(pressTimer); });
+                valEl.addEventListener('touchmove', function() { clearTimeout(pressTimer); valEl.classList.remove('reveal'); });
+                valEl.addEventListener('click', function() { valEl.classList.toggle('reveal'); });
+                card.querySelector('.lbl').innerHTML = '预估成交 <em class="conf-' + json.confidence + '">' +
+                    ({high:'高',medium:'中',low:'低',very_low:'极低'})[json.confidence] + '</em>';
+            } catch (err) {
+                card.querySelector('.val').textContent = '—';
+                card.querySelector('.lbl').textContent = '预估失败';
+            }
+        }
+
+        // ===== PiP 看板 HTML/CSS/JS 生成 =====
+        function getPipCSS() {
+            return '*{margin:0;padding:0;box-sizing:border-box}' +
+                'html,body{width:100%;height:100%;font-family:"Microsoft YaHei","PingFang SC",sans-serif;overflow:hidden;background:#14141a;color:#fff}' +
+                'body{display:flex;flex-direction:column;--font-size:36px}' +
+                '.top{display:flex;align-items:center;padding:6px 12px;background:rgba(0,0,0,0.2);min-height:32px;flex-shrink:0}' +
+                '.top .name{font-size:11px;color:rgba(255,255,255,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+                '.sub-area{flex:1;display:flex;align-items:center;justify-content:center;padding:8px 16px;overflow-y:auto;min-height:50px}' +
+                '.sub-area::-webkit-scrollbar{width:2px}' +
+                '.sub-area::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1)}' +
+                '.sub-text{font-size:var(--font-size);font-weight:700;text-align:center;line-height:1.5;text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 12px rgba(0,0,0,0.7);transition:font-size 0.2s}' +
+                '.sub-text.idle{font-size:14px;font-weight:400;color:rgba(255,255,255,0.2);text-shadow:none}' +
+                '.bottom{display:flex;align-items:center;padding:6px 10px 10px;gap:0;flex-shrink:0}' +
+                '.btn-wrap{flex:1;display:flex;min-width:0}' +
+                '.btn-wrap.l{justify-content:flex-start}.btn-wrap.r{justify-content:flex-end}' +
+                '.abtn{position:relative;width:100%;height:38px;border:1px solid rgba(255,255,255,0.1);border-radius:7px;background:rgba(255,255,255,0.03);color:rgba(255,255,255,0.5);cursor:pointer;font-size:12px;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:0 10px}' +
+                '.abtn:hover{border-color:rgba(255,255,255,0.2);color:rgba(255,255,255,0.8)}' +
+                '.abtn .fill{position:absolute;left:0;top:0;height:100%;width:0%;background:rgba(240,160,64,0.3);border-radius:6px 0 0 6px;transition:width 0.25s;z-index:0}' +
+                '.abtn .cnt{position:relative;z-index:1;display:flex;align-items:center;justify-content:space-between;width:100%}' +
+                '.abtn.playing{border-color:rgba(240,160,64,0.45);color:#f0a040}' +
+                '.abtn.playing .ilabel{color:#f0a040;font-weight:600}' +
+                '.abtn .cd{font-size:10px;color:rgba(255,255,255,0.4);font-family:Consolas,monospace;display:none}' +
+                '.abtn.playing .cd{display:inline;color:#f0a040}' +
+                '.nav{display:flex;align-items:center;gap:4px;padding:0 6px;flex-shrink:0}' +
+                '.nav button{width:28px;height:28px;border:1px solid rgba(255,255,255,0.08);border-radius:50%;background:rgba(255,255,255,0.03);color:rgba(255,255,255,0.45);cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center}' +
+                '.nav button:hover{background:rgba(255,255,255,0.1);color:#fff}' +
+                '.nav .num{font-size:14px;color:#f0a040;font-weight:800;min-width:20px;text-align:center}' +
+                '.div{width:1px;height:20px;background:rgba(255,255,255,0.06);flex-shrink:0}';
+        }
+
+        function getPipHTML() {
+            return '<div class="top"><span class="name" id="pn"></span></div>' +
+                '<div class="sub-area" id="sa"><div class="sub-text idle" id="st">等待播放…</div></div>' +
+                '<div class="bottom">' +
+                '<div class="btn-wrap l"><button class="abtn" id="bt" onclick="pipClick(\'template\')"><span class="fill" id="ft"></span><span class="cnt"><span class="ilabel">▶ 固定介绍</span><span class="cd" id="ct"></span></span></button></div>' +
+                '<span class="div"></span>' +
+                '<div class="nav"><button onclick="pipNav(-1)">⏮</button><span class="num" id="nm">-</span><button onclick="pipNav(1)">⏭</button></div>' +
+                '<span class="div"></span>' +
+                '<div class="btn-wrap r"><button class="abtn" id="bc" onclick="pipClick(\'commentary\')"><span class="fill" id="fc"></span><span class="cnt"><span class="ilabel">▶ 拍品亮点</span><span class="cd" id="cc"></span></span></button></div>' +
+                '</div>';
+        }
+
+        function getPipJS() {
+            return '(' + function() {
+                var _state = null;
+                var _finished = {};
+
+                window.addEventListener('message', function(e) {
+                    if (!e.data || !e.data.type) return;
+                    var m = e.data;
+                    if (m.type === 'playback_state') {
+                        var oldIdx = _state ? _state.index : -1;
+                        if (m.index !== oldIdx) _finished = {};
+                        _state = m;
+                        if (m.playing) delete _finished[m.index + '_' + m.audio_type];
+                        updateUI(m);
+                    } else if (m.type === 'idle') {
+                        if (_state) {
+                            _finished[_state.index + '_' + _state.audio_type] = true;
+                            _state.playing = false; _state.progress = 0; _state.current_time = _state.duration || 0;
+                            updateUI(_state);
+                            showFinished(_state.audio_type);
+                        }
+                    } else if (m.type === 'no_audio') {
+                        if (_state) { _state.playing = false; updateUI(_state); }
+                        document.getElementById('st').textContent = '当前没有音频';
+                        document.getElementById('st').className = 'sub-text idle';
+                        resetBtns();
+                    }
+                });
+
+                function sendToOpener(msg) {
+                    msg.from = 'auction_pip';
+                    try { window.opener.postMessage(msg, '*'); } catch(e) {}
+                }
+                // 通知主页面 PiP 已就绪
+                sendToOpener({type:'pip_ready'});
+
+                function updateUI(m) {
+                    if (!m) { document.getElementById('st').textContent = '等待播放…'; document.getElementById('st').className = 'sub-text idle'; document.getElementById('nm').textContent = '-'; document.getElementById('pn').textContent = ''; resetBtns(); return; }
+                    var num = (m.index !== undefined) ? (m.index + 1) : '?';
+                    document.getElementById('nm').textContent = num;
+                    document.getElementById('pn').textContent = '#' + num + ' ' + (m.name || '');
+                    if (m.subtitle) { document.getElementById('st').textContent = m.subtitle; document.getElementById('st').className = 'sub-text'; }
+                    document.getElementById('sa').scrollTop = 0;
+                    updateBtns(m);
+                }
+
+                function updateBtns(m) {
+                    var idx = m.index || 0;
+                    var tf = _finished[idx + '_template'];
+                    var cf = _finished[idx + '_commentary'];
+                    if (tf) { showFinishedBtn('t', 'ft', 'bt', 'ct', '固定介绍'); }
+                    else if (m.audio_type === 'template') { updateBtn('t', 'ft', 'bt', 'ct', '固定介绍', true, m.playing && m.audio_type === 'template', m.progress||0, m.duration||0, m.current_time||0); }
+                    else { updateBtn('t', 'ft', 'bt', 'ct', '固定介绍', false, false, 0, 0, 0); }
+
+                    if (cf) { showFinishedBtn('c', 'fc', 'bc', 'cc', '拍品亮点'); }
+                    else if (m.audio_type === 'commentary') { updateBtn('c', 'fc', 'bc', 'cc', '拍品亮点', true, m.playing && m.audio_type === 'commentary', m.progress||0, m.duration||0, m.current_time||0); }
+                    else { updateBtn('c', 'fc', 'bc', 'cc', '拍品亮点', false, false, 0, 0, 0); }
+                }
+
+                function updateBtn(suf, fid, bid, cid, label, isActive, isPlaying, progress, duration, cur) {
+                    var b = document.getElementById(bid);
+                    var f = document.getElementById(fid);
+                    var c = document.getElementById(cid);
+                    b.classList.toggle('playing', isPlaying);
+                    f.style.width = (isActive ? (progress * 100) : 0) + '%';
+                    b.querySelector('.ilabel').textContent = (isPlaying ? '⏸ ' : '▶ ') + label;
+                    if (isPlaying && duration > 0) {
+                        var rem = Math.max(0, Math.ceil(duration - cur));
+                        c.textContent = '-' + Math.floor(rem/60) + ':' + (rem%60<10?'0':'') + (rem%60);
+                        c.style.display = 'inline';
+                    } else { c.textContent = ''; c.style.display = 'none'; }
+                }
+
+                function showFinishedBtn(suf, fid, bid, cid, label) {
+                    document.getElementById(bid).classList.remove('playing');
+                    document.getElementById(bid).querySelector('.ilabel').textContent = '▶ ' + label;
+                    document.getElementById(fid).style.width = '100%';
+                    var c = document.getElementById(cid);
+                    c.textContent = '已播放'; c.style.display = 'inline';
+                }
+
+                function showFinished(type) {
+                    document.getElementById('st').textContent = '播放完成';
+                    document.getElementById('st').className = 'sub-text idle';
+                    document.getElementById('sa').scrollTop = 0;
+                    showFinishedBtn(type==='template'?'t':'c', type==='template'?'ft':'fc', type==='template'?'bt':'bc', type==='template'?'ct':'cc', type==='template'?'固定介绍':'拍品亮点');
+                    var other = type==='template'?'c':'t';
+                    updateBtn(other, 'f'+other, 'b'+other, 'c'+other, other==='t'?'固定介绍':'拍品亮点', false, false, 0, 0, 0);
+                }
+
+                function resetBtns() {
+                    updateBtn('t','ft','bt','ct','固定介绍',false,false,0,0,0);
+                    updateBtn('c','fc','bc','cc','拍品亮点',false,false,0,0,0);
+                }
+
+                window.pipClick = function(type) {
+                    if (!_state) return;
+                    var isActive = (_state.audio_type === type);
+                    if (isActive && _state.playing) {
+                        sendToOpener({type:'control', action:'pause', index:_state.index, audio_type:type});
+                        _state.playing = false; updateBtns(_state);
+                    } else if (isActive && !_state.playing) {
+                        sendToOpener({type:'control', action:'play', index:_state.index, audio_type:type});
+                        _state.playing = true; updateBtns(_state);
+                    } else {
+                        _state.audio_type = type; _state.playing = true; _state.progress = 0; _state.current_time = 0;
+                        updateBtns(_state);
+                        sendToOpener({type:'control', action:'play', index:_state.index, audio_type:type});
+                    }
+                };
+
+                window.pipNav = function(delta) {
+                    var curIdx = _state ? _state.index : 0;
+                    var action = delta < 0 ? 'prev_item' : 'next_item';
+                    _state = null; _finished = {};
+                    document.getElementById('st').textContent = '等待播放…';
+                    document.getElementById('st').className = 'sub-text idle';
+                    document.getElementById('sa').scrollTop = 0;
+                    resetBtns();
+                    sendToOpener({type:'control', action:action, index:curIdx});
+                };
+            }.toString() + ')();';
+        }
+
+        // ===== 批量生成 TTS =====
+        var _batchRunning = false;
+        var _batchAbort = false;
+
+        async function batchGenerate(type) {
+            if (_batchRunning) { _batchAbort = true; return; }
+            if (!allItems.length) return;
+            // 校验：所有拍品必须已分析完毕
+            var missing = [];
+            for (var i = 0; i < allItems.length; i++) {
+                if (!resultsMap[i]) missing.push(i + 1);
+            }
+            if (missing.length > 0) {
+                alert('以下拍品尚未分析完毕，请等待分析完成后再批量生成：\n#' + missing.join(', #'));
+                return;
+            }
+            // 弹窗确认
+            var confirmLabel = type === 'template' ? '固定介绍' : '拍品亮点';
+            if (!confirm('批量生成会覆盖当前所有拍品的【' + confirmLabel + '】音频，是否继续？')) return;
+            _batchRunning = true; _batchAbort = false;
+            var label = type === 'template' ? '固定介绍' : '拍品亮点';
+            var btn = document.getElementById(type === 'template' ? 'batchTemplateBtn' : 'batchCommentaryBtn');
+            var progressEl = document.getElementById('batchProgress');
+            var voice = document.getElementById('globalVoice').value;
+            btn.textContent = '⏹ 停止';
+            btn.style.background = '#e74c3c';
+            progressEl.style.display = 'inline';
+            var total = allItems.length;
+            var done = 0;
+            for (var i = 0; i < total; i++) {
+                if (_batchAbort) break;
+                var item = allItems[i];
+                var idx = item.index !== undefined ? item.index : i;
+                var data = resultsMap[idx];
+                if (!data) continue;
+                var text = getAudioText(data, type);
+                if (!text || text.length < 5) continue;
+                progressEl.textContent = label + ': ' + done + '/' + total;
+                try {
+                    var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type}), cache:'no-store' });
+                    if (resp.ok) {
+                        if (type === 'template') data._has_template_audio = true;
+                        else data._has_commentary_audio = true;
+                        updateAudioStatus(idx);
+                        done++;
+                    }
+                } catch(e) {}
+            }
+            _batchRunning = false;
+            btn.textContent = type === 'template' ? '📋 批量生成固定介绍' : '🎙 批量生成拍品亮点';
+            btn.style.background = '';
+            progressEl.textContent = '完成 ' + done + '/' + total;
+            setTimeout(function() { progressEl.style.display = 'none'; }, 3000);
+        }
+
+        // ===== 自动加载缓存 =====
+        async function autoLoadCache() {
+            var url = document.getElementById('feishuUrl').value.trim();
+            if (!url) return;
+            // 显示加载状态
+            document.getElementById('resultSection').classList.remove('hidden');
+            document.getElementById('tableBody').innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#aaa;font-size:1em">⏳ 正在检查数据更新…</td></tr>';
+            try {
+                var resp = await fetch('/api/cache-status?feishu_url=' + encodeURIComponent(url));
+                var json = await resp.json();
+                if (json.matched && json.items) {
+                    // 缓存命中，直接显示
+                    allItems = json.items.map(function(it, i) { it.index = i; return it; });
+                    totalCount = allItems.length;
+                    allItems.forEach(function(item) {
+                        resultsMap[item.index] = item;
+                    });
+                    document.getElementById('totalBadge').textContent = totalCount;
+                    document.getElementById('resultSection').classList.remove('hidden');
+                    document.getElementById('batchBar').style.display = 'flex';
+                    buildTable();
+                    buildSummary(allItems);
+                    allItems.forEach(function(item, i) {
+                        setRowStatus(i, 'done');
+                    });
+                    document.getElementById('btnText').textContent = '强制更新';
+                } else {
+                    // 缓存未命中，显示提示
+                    document.getElementById('resultSection').classList.remove('hidden');
+                    document.getElementById('tableBody').innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:#e67e22;font-size:1em">飞书内容有更新，需要重新分析</td></tr>';
+                    document.getElementById('btnText').textContent = '开始分析';
+                }
+            } catch(e) {
+                console.error('自动加载缓存失败:', e);
+                document.getElementById('btnText').textContent = '开始分析';
+            }
+        }
+
+        // 页面加载时自动检测缓存
+        autoLoadCache();
     </script>
 </body>
 </html>

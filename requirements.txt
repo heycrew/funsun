@@ -5,3 +5,8 @@ pydantic
 jinja2
 python-multipart
 aiofiles
+httpx
+openpyxl
+python-jose
+anyio
+pywebview

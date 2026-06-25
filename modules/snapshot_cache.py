@@ -27,7 +27,9 @@ def item_fingerprint(item: dict) -> str:
 
 def compute_fingerprint(items: list[dict]) -> str:
     """根据拍品 code+name 列表计算指纹（MD5）—— 用于全局快速判断"""
-    payload = "|".join(f"{it.get('code','')}:{it.get('name','')}:{it.get('kiln','')}:{it.get('starting_price','')}:{it.get('estimate','')}" for it in items)
+    # 按 code 排序确保顺序一致
+    sorted_items = sorted(items, key=lambda it: str(it.get('code', '')))
+    payload = "|".join(f"{it.get('code','')}:{it.get('name','')}:{it.get('kiln','')}:{it.get('starting_price','')}:{it.get('estimate','')}" for it in sorted_items)
     return hashlib.md5(payload.encode()).hexdigest()
 
 
@@ -166,3 +168,38 @@ def update_item_in_snapshot(index: int, commentary: str = None, market_analysis:
             break
     save_snapshot(snap["items"], snap.get("fingerprint", ""))
     logger.info(f"快照已更新: index={index}")
+
+
+# ── 预估缓存 ──────────────────────────────────────────
+
+PREDICTION_FILE = CACHE_DIR / "prediction_cache.json"
+
+
+def save_prediction(items: list[dict], result: dict):
+    """保存预估结果到缓存（按拍品指纹索引）"""
+    fp = compute_fingerprint(items)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "fingerprint": fp,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "result": {k: result[k] for k in ["low", "best", "high", "confidence", "components", "session_summary"]},
+    }
+    with open(PREDICTION_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    logger.info(f"预估已缓存: fp={fp[:12]}...")
+
+
+def get_cached_prediction(items: list[dict]) -> dict | None:
+    """如果拍品指纹未变，返回缓存的预估结果"""
+    if not PREDICTION_FILE.exists():
+        return None
+    try:
+        with open(PREDICTION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        current_fp = compute_fingerprint(items)
+        if data.get("fingerprint") == current_fp:
+            logger.info(f"命中预估缓存: {data.get('timestamp')}")
+            return data.get("result")
+    except (json.JSONDecodeError, IOError):
+        pass
+    return None
