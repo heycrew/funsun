@@ -230,7 +230,7 @@ async def generate_commentary_ai_direct(item: dict, obsidian_context: str, marke
                 "model": config.DEEPSEEK_MODEL,
                 "messages": [{"role": "user", "content": user_prompt}],
                 "temperature": 0.8,
-                "max_tokens": 600,
+                "max_tokens": 1200,
             },
         )
         resp.raise_for_status()
@@ -253,20 +253,51 @@ def _load_commentary_config() -> dict:
 
 
 def _render_template(template: str, item: dict, index: int) -> str:
-    """用拍品数据渲染固定模板，如 [拍品名字] → item['name']"""
+    """用拍品数据渲染固定模板，如 [拍品名字] → item['name']
+    规则：若字段值为空或'无'，则移除该字段对应的描述短语（含前导标点）"""
     import re
     field_map = {
         "序号": str(index + 1), "拍品名字": item.get("name", ""),
-        "窑口": item.get("kiln", ""), "款识": item.get("kiln", ""),
+        "窑口": item.get("kiln", ""), "款识": item.get("inscription", item.get("kiln", "")),
         "年份": item.get("era", ""), "年代": item.get("era", ""),
         "尺寸": item.get("size", ""), "容量": item.get("capacity", item.get("size", "")),
         "品相": item.get("condition", ""), "参考价": item.get("estimate", ""),
         "起拍价": item.get("starting_price", ""), "材质": item.get("material", ""),
+        "市场参考价": item.get("estimate", ""),
     }
+    # 特殊模板单元：整句「本件拍品[原盒/证书]」根据飞书"原盒/证书"字段值替换
+    cert_val = item.get("certificate", "") or ""
+    cert_replacement = ""
+    if cert_val == "有/无":
+        cert_replacement = "本件拍品有窑口原配盒子"
+    elif cert_val == "有/有":
+        cert_replacement = "本件拍品有证书有窑口原配盒子"
+    elif cert_val == "无/有":
+        cert_replacement = "本件拍品有证书"
+    # 无/无 或空值 → cert_replacement 保持 ""（整句移除）
+    template = template.replace("本件拍品[原盒/证书]", cert_replacement)
+
     def repl(m):
         key = m.group(1)
-        return field_map.get(key, m.group(0))
-    return re.sub(r'\[([^\]]+)\]', repl, template)
+        val = field_map.get(key, m.group(0))
+        return val if val else m.group(0)  # 空值保留占位符，后续清理
+
+    result = re.sub(r'\[([^\]]+)\]', repl, template)
+
+    # 清理规则：移除 空值占位符 或 值为"无"的字段
+    # 1. 移除 [任意占位符]（值为空未被替换的）
+    result = re.sub(r'\[[^\]]+\]', '', result)
+    # 2. 移除 "无" 值及其前面的描述文字/标点
+    #    匹配模式：标点+任意非标点字符+无，如 "，容量无" → 删除
+    result = re.sub(r'[，、；]\s*[^，。；！？、]*?无', '', result)
+    # 3. 清理残留：连续的标点 → 单个
+    result = re.sub(r'[，、；]{2,}', '，', result)
+    # 4. 清理句首逗号
+    result = re.sub(r'^[，、；]\s*', '', result)
+    # 5. 清理句尾多余的标点后跟句号
+    result = re.sub(r'[，、；]\s*。', '。', result)
+
+    return result
 
 
 def _build_prompt(item, name, kiln, obsidian_context, market_records, market_analysis, fixed_part="", index=0):
@@ -379,7 +410,7 @@ async def generate_commentary_ai(item: dict) -> str:
                     {"role": "user", "content": user_prompt},
                 ],
                 "temperature": 0.8,
-                "max_tokens": 600,
+                "max_tokens": 1200,
             },
         )
         resp.raise_for_status()

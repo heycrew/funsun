@@ -67,6 +67,13 @@
                         <option value="S_0fqs4pf62">杨雪(复刻)</option>
                         <option value="S_Zeqs4pf62">培文(复刻)</option>
                     </select>
+                    <select class="voice-select" id="globalSpeed" style="width:auto" onchange="localStorage.setItem('gen_speed',this.value)">
+                        <option value="0.75">0.75x</option>
+                        <option value="1.0" selected>1.0x</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2.0">2.0x</option>
+                    </select>
                     <button class="batch-btn" onclick="batchGenerate('template')" id="batchTemplateBtn">📋 批量生成固定介绍</button>
                     <button class="batch-btn" onclick="batchGenerate('commentary')" id="batchCommentaryBtn">🎙 批量生成拍品亮点</button>
                     <span class="batch-progress" id="batchProgress" style="display:none"></span>
@@ -99,6 +106,17 @@
         let doneCount = 0;
         let abortController = null;
         let audioState = {};
+        // 全局播放倍速（持久化）
+        var _saved = localStorage.getItem('playback_rate');
+        let _playbackRate = _saved ? (parseFloat(_saved) || 1.0) : 1.0;
+        // 生成倍速恢复
+        (function() {
+            var savedSpeed = localStorage.getItem('gen_speed');
+            if (savedSpeed) {
+                var el = document.getElementById('globalSpeed');
+                if (el) el.value = savedSpeed;
+            }
+        })();
         // ===== 桌面看板 WebSocket 连接 =====
         let _ws = null;
         let _wsReconnectTimer = null;
@@ -216,13 +234,40 @@
                     }
                     break;
                 case 'prev_item':
-                    if (expandedRow !== null && expandedRow > 0 && allItems[expandedRow - 1]) {
+                case 'next_item':
+                    // 重置当前拍品所有音频进度
+                    if (expandedRow !== null) {
+                        Object.keys(audioState).forEach(function(k) {
+                            if (audioState[k] && audioState[k].idx === expandedRow) {
+                                audioState[k].audio.pause();
+                                audioState[k].audio.currentTime = 0;
+                                audioState[k].playing = false;
+                            }
+                        });
+                    }
+                    if (msg.action === 'prev_item' && expandedRow !== null && expandedRow > 0 && allItems[expandedRow - 1]) {
                         toggleExpand(expandedRow - 1);
+                    } else if (msg.action === 'next_item' && expandedRow !== null && expandedRow < allItems.length - 1 && allItems[expandedRow + 1]) {
+                        toggleExpand(expandedRow + 1);
                     }
                     break;
-                case 'next_item':
-                    if (expandedRow !== null && expandedRow < allItems.length - 1 && allItems[expandedRow + 1]) {
-                        toggleExpand(expandedRow + 1);
+                case 'cycle_speed':
+                    cyclePlaybackRate();
+                    break;
+                case 'set_speed':
+                    if (msg.speed !== undefined) {
+                        _playbackRate = msg.speed;
+                        localStorage.setItem('playback_rate', msg.speed);
+                        Object.keys(audioState).forEach(function(k) {
+                            if (audioState[k] && audioState[k].audio) {
+                                audioState[k].audio.playbackRate = _playbackRate;
+                            }
+                        });
+                        Object.keys(audioState).forEach(function(k) {
+                            if (audioState[k]) renderDualControls(audioState[k].idx, audioState[k].type);
+                        });
+                        _wsLastSend = 0;
+                        if (_wsActiveIdx >= 0) updateDualProgress(_wsActiveIdx, _wsActiveType);
                     }
                     break;
             }
@@ -737,9 +782,10 @@
             if (blob.size < 500) return;
             var url = URL.createObjectURL(blob);
             var audio = new Audio(url);
+            applyPlaybackRate(audio);
             var data = resultsMap[idx] || {};
             var text = getAudioText(data, type);
-            var rawS = text.split(/[.！？\n]+/).filter(function(s){return s.trim().length>2});
+            var rawS = smartSplit(text);
             var tc = rawS.reduce(function(sum,s){return sum+s.length},0) || 1;
             var ca = 0;
             var sts = rawS.map(function(s){var st=ca/tc;ca+=s.length;return{text:s,start:st,end:ca/tc}});
@@ -779,6 +825,51 @@
 
         function getAudioLabel(type) { return type === 'template' ? '固定模板' : 'AI解说稿'; }
 
+        function cyclePlaybackRate() {
+            var rates = [1.0, 1.25, 1.5, 2.0, 0.75];
+            var cur = _playbackRate;
+            var idx = rates.indexOf(cur);
+            var next = rates[(idx + 1) % rates.length];
+            _playbackRate = next;
+            localStorage.setItem('playback_rate', next);
+            // 应用到所有音频
+            Object.keys(audioState).forEach(function(k) {
+                if (audioState[k] && audioState[k].audio) {
+                    audioState[k].audio.playbackRate = next;
+                }
+            });
+            // 更新所有控件的倍速按钮
+            Object.keys(audioState).forEach(function(k) {
+                if (audioState[k]) renderDualControls(audioState[k].idx, audioState[k].type);
+            });
+        }
+
+        function applyPlaybackRate(audio) {
+            if (audio) audio.playbackRate = _playbackRate;
+        }
+
+        // 智能分句：中文标点断开，短句合并，目标每句 20-35 字
+        function smartSplit(text) {
+            // 中文标点切分（不含英文句号，避免切断小数点）
+            var raw = text.split(/[。！？；：，、\n]+/).filter(function(s){ return s.trim().length > 0; });
+            if (raw.length === 0) return [];
+            var result = [];
+            var buf = '';
+            for (var i = 0; i < raw.length; i++) {
+                var s = raw[i].trim();
+                if (!buf) { buf = s; continue; }
+                var combined = buf + '，' + s;
+                if (combined.length > 35) {
+                    result.push(buf);
+                    buf = s;
+                } else {
+                    buf = combined;
+                }
+            }
+            if (buf) result.push(buf);
+            return result;
+        }
+
         async function generateDualSpeech(idx, type) {
             var data = resultsMap[idx];
             var text = getAudioText(data, type);
@@ -797,16 +888,18 @@
             if (player) { player.style.display = 'flex'; player.innerHTML = '<span class=\"tts-status\">⏳ ' + getAudioLabel(type) + ' | 火山引擎生成中...</span>'; }
 
             try {
-                var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type}), cache:'no-store' });
+                var genSpeed = parseFloat(localStorage.getItem('gen_speed') || '1.0') || 1.0;
+                var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type, speed:genSpeed}), cache:'no-store' });
                 if (!resp.ok) throw new Error('TTS failed');
                 var blob = await resp.blob();
                 if (blob.size < 1000) throw new Error('音频太小');
                 var url = URL.createObjectURL(blob) + '#t=' + Date.now();
                 var audio = new Audio(url); audio.load();
+                applyPlaybackRate(audio);
                 var itemName = data.name || ('拍品'+idx);
                 var dateStr = new Date().toISOString().slice(0,10);
                 var filename = (idx+1)+'_'+itemName+'_'+dateStr+'_'+voiceLabel+'_'+getAudioLabel(type)+'.mp3'.replace(/[\\/:*?\"<>|]/g,'_');
-                var rawS = text.split(/[.！？\n]+/).filter(function(s){return s.trim().length>2});
+                var rawS = smartSplit(text);
                 var tc = rawS.reduce(function(sum,s){return sum+s.length},0);
                 var ca = 0;
                 var sts = rawS.map(function(s){var st=ca/tc;ca+=s.length;return{text:s,start:st,end:ca/tc}});
@@ -819,8 +912,6 @@
                 if (player) player.innerHTML = '<div class=\"audio-controls\" id=\"'+prefix+'audioControls-'+idx+'\"></div>';
                 if (ttsBtn) ttsBtn.style.display = 'none';
                 renderDualControls(idx, type);
-                audioState[key].playing = true;
-                audio.play().catch(function(){});
                 renderDualControls(idx, type);
                 // 更新列表音频状态
                 var d = resultsMap[idx];
@@ -868,12 +959,18 @@
                 }
                 var progress = cur / dur;
                 var found = st.sentenceTimings[0].text;
+                var foundIdx = 0;
                 for (var i = 0; i < st.sentenceTimings.length; i++) {
                     var t = st.sentenceTimings[i];
-                    if (progress >= t.start && progress < t.end) { found = t.text; break; }
-                    if (progress >= t.end) found = t.text;
+                    if (progress >= t.start && progress < t.end) { found = t.text; foundIdx = i; break; }
+                    if (progress >= t.end) { found = t.text; foundIdx = i; }
                 }
                 subtitle = found;
+                // 下一句（KTV歌词式预览）
+                var nextSub = '';
+                if (foundIdx + 1 < st.sentenceTimings.length) {
+                    nextSub = st.sentenceTimings[foundIdx + 1].text;
+                }
                 if (type === 'commentary') {
                     var se = document.getElementById('subtitle-' + idx);
                     if (se) se.innerHTML = '<span class=\"sub-active\">' + esc(found) + '</span>';
@@ -895,7 +992,9 @@
                     current_time: cur,
                     duration: dur,
                     subtitle: subtitle,
-                    progress: dur > 0 ? (cur / dur) : 0
+                    next_subtitle: nextSub,
+                    progress: dur > 0 ? (cur / dur) : 0,
+                    speed: _playbackRate
                 };
                 wsSend(wsMsg);
             }
@@ -939,7 +1038,14 @@
                     // 用模板 + 数据渲染
                     var d = data;
                     var num = (d.index !== undefined) ? (d.index + 1) : '?';
-                    var fresh = tpl
+                    // 特殊模板单元：整句「本件拍品[原盒/证书]」替换
+                    var certVal = d.certificate || '';
+                    var certReplace = '';
+                    if (certVal === '有/无') certReplace = '本件拍品有窑口原配盒子';
+                    else if (certVal === '有/有') certReplace = '本件拍品有证书有窑口原配盒子';
+                    else if (certVal === '无/有') certReplace = '本件拍品有证书';
+                    // 无/无 或空值 → certReplace 保持 ''（整句移除）
+                    var fresh = tpl.replace(/本件拍品\[原盒\/证书\]/g, certReplace)
                         .replace(/\[序号\]/g, num)
                         .replace(/\[拍品名字\]/g, d.name || '')
                         .replace(/\[款识\]/g, d.inscription || d.kiln || '')
@@ -947,12 +1053,18 @@
                         .replace(/\[年份\]/g, d.era || '')
                         .replace(/\[年代\]/g, d.era || '')
                         .replace(/\[尺寸\]/g, d.size || '')
-                        .replace(/\[容量\]/g, d.capacity || '')
+                        .replace(/\[容量\]/g, d.capacity || d.size || '')
                         .replace(/\[品相\]/g, d.condition || '')
                         .replace(/\[参考价\]/g, d.estimate || '')
                         .replace(/\[起拍价\]/g, d.starting_price || '')
                         .replace(/\[材质\]/g, d.material || '')
                         .replace(/\[市场参考价\]/g, d.estimate || '');
+                    // 清理空值/无值字段
+                    fresh = fresh.replace(/\[[^\]]+\]/g, '');  // 移除未替换的占位符
+                    fresh = fresh.replace(/[，、；]\s*[^，。；！？、]*?无/g, '');  // 移除值为"无"的描述
+                    fresh = fresh.replace(/[，、；]{2,}/g, '，');
+                    fresh = fresh.replace(/^[，、；]\s*/g, '');
+                    fresh = fresh.replace(/[，、；]\s*。/g, '。');
                     data.template_text = fresh;
                     var textEl = document.getElementById('tplText-' + idx);
                     if (textEl) textEl.textContent = fresh;
@@ -1273,12 +1385,14 @@
                 'html,body{width:100%;height:100%;font-family:"Microsoft YaHei","PingFang SC",sans-serif;overflow:hidden;background:#14141a;color:#fff}' +
                 'body{display:flex;flex-direction:column;--font-size:36px}' +
                 '.top{display:flex;align-items:center;padding:6px 12px;background:rgba(0,0,0,0.2);min-height:32px;flex-shrink:0}' +
-                '.top .name{font-size:11px;color:rgba(255,255,255,0.3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-                '.sub-area{flex:1;display:flex;align-items:center;justify-content:center;padding:8px 16px;overflow-y:auto;min-height:50px}' +
-                '.sub-area::-webkit-scrollbar{width:2px}' +
-                '.sub-area::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1)}' +
-                '.sub-text{font-size:var(--font-size);font-weight:700;text-align:center;line-height:1.5;text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 12px rgba(0,0,0,0.7);transition:font-size 0.2s}' +
-                '.sub-text.idle{font-size:14px;font-weight:400;color:rgba(255,255,255,0.2);text-shadow:none}' +
+                '.top .name{font-size:11px;color:#f0a040;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+                '.top .fs-btn{width:22px;height:22px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;background:transparent;color:rgba(255,255,255,0.45);cursor:pointer;font-size:12px;line-height:1;flex-shrink:0}' +
+                '.top .fs-btn:hover{background:rgba(255,255,255,0.1);color:#fff}' +
+                '.sub-area{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 16px;overflow:hidden;min-height:50px;gap:8px}' +
+                '.sub-current{font-weight:700;color:#fff;text-align:center;line-height:1.5;text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 12px rgba(0,0,0,0.7);transition:all 0.3s;max-width:100%}' +
+                '.sub-next{color:rgba(255,255,255,0.25);text-align:center;line-height:1.4;transition:all 0.3s;max-width:100%}' +
+                '.sub-area.idle .sub-current{font-size:14px;font-weight:400;color:rgba(255,255,255,0.2);text-shadow:none}' +
+                '.sub-area.idle .sub-next{display:none}' +
                 '.bottom{display:flex;align-items:center;padding:6px 10px 10px;gap:0;flex-shrink:0}' +
                 '.btn-wrap{flex:1;display:flex;min-width:0}' +
                 '.btn-wrap.l{justify-content:flex-start}.btn-wrap.r{justify-content:flex-end}' +
@@ -1293,19 +1407,28 @@
                 '.nav{display:flex;align-items:center;gap:4px;padding:0 6px;flex-shrink:0}' +
                 '.nav button{width:28px;height:28px;border:1px solid rgba(255,255,255,0.08);border-radius:50%;background:rgba(255,255,255,0.03);color:rgba(255,255,255,0.45);cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center}' +
                 '.nav button:hover{background:rgba(255,255,255,0.1);color:#fff}' +
-                '.nav .num{font-size:14px;color:#f0a040;font-weight:800;min-width:20px;text-align:center}' +
+                '.nav .num{font-size:22px;color:#f0a040;font-weight:900;min-width:28px;text-align:center}' +
+                '.speed-wrap{position:relative;flex-shrink:0}' +
+                '.speed-btn{width:38px;height:22px;border:1px solid rgba(240,160,64,0.4);border-radius:4px;background:transparent;color:#f0a040;cursor:pointer;font-size:10px;font-weight:700}' +
+                '.speed-btn:hover{background:rgba(240,160,64,0.15)}' +
+                '.speed-drop{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);margin-bottom:4px;background:#1a1a24;border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:4px;display:none;z-index:999}' +
+                '.speed-drop.show{display:block}' +
+                '.speed-drop div{padding:4px 12px;font-size:11px;color:rgba(255,255,255,0.6);cursor:pointer;border-radius:4px;text-align:center;white-space:nowrap}' +
+                '.speed-drop div:hover{background:rgba(240,160,64,0.2);color:#f0a040}' +
+                '.speed-drop div.active{color:#f0a040;font-weight:700}' +
                 '.div{width:1px;height:20px;background:rgba(255,255,255,0.06);flex-shrink:0}';
         }
 
         function getPipHTML() {
-            return '<div class="top"><span class="name" id="pn"></span></div>' +
-                '<div class="sub-area" id="sa"><div class="sub-text idle" id="st">等待播放…</div></div>' +
+            return '<div class="top"><span class="name" id="pn"></span><span style="flex:1"></span><button class="fs-btn" onclick="adjFs(+2)">+</button><span id="fsVal" style="font-size:10px;color:rgba(255,255,255,0.4);min-width:30px;text-align:center">36</span><button class="fs-btn" onclick="adjFs(-2)">−</button></div>' +
+                '<div class="sub-area idle" id="sa"><div class="sub-current" id="sc"></div><div class="sub-next" id="sn"></div><div class="sub-text idle" id="st">等待播放…</div></div>' +
                 '<div class="bottom">' +
                 '<div class="btn-wrap l"><button class="abtn" id="bt" onclick="pipClick(\'template\')"><span class="fill" id="ft"></span><span class="cnt"><span class="ilabel">▶ 固定介绍</span><span class="cd" id="ct"></span></span></button></div>' +
                 '<span class="div"></span>' +
                 '<div class="nav"><button onclick="pipNav(-1)">⏮</button><span class="num" id="nm">-</span><button onclick="pipNav(1)">⏭</button></div>' +
                 '<span class="div"></span>' +
                 '<div class="btn-wrap r"><button class="abtn" id="bc" onclick="pipClick(\'commentary\')"><span class="fill" id="fc"></span><span class="cnt"><span class="ilabel">▶ 拍品亮点</span><span class="cd" id="cc"></span></span></button></div>' +
+                '<span class="speed-wrap" style="margin-left:6px"><button class="speed-btn" id="spd" onclick="pipToggleSpeed()">1x</button><div class="speed-drop" id="spdDrop"></div></span>' +
                 '</div>';
         }
 
@@ -1313,6 +1436,24 @@
             return '(' + function() {
                 var _state = null;
                 var _finished = {};
+
+                // 字号持久化——直接改元素 style，不依赖 CSS 变量
+                var _fs = 36;
+                try { var saved = localStorage.getItem('pip_font_size'); if (saved) _fs = parseInt(saved) || 36; } catch(e) {}
+                function applyFs() {
+                    var cur = document.getElementById('sc');
+                    var nxt = document.getElementById('sn');
+                    if (cur) cur.style.fontSize = _fs + 'px';
+                    if (nxt) nxt.style.fontSize = Math.round(_fs * 0.55) + 'px';
+                    var fv = document.getElementById('fsVal');
+                    if (fv) fv.textContent = _fs;
+                }
+                applyFs();
+                window.adjFs = function(delta) {
+                    _fs = Math.max(20, Math.min(100, _fs + delta));
+                    applyFs();
+                    try { localStorage.setItem('pip_font_size', _fs); } catch(e) {}
+                };
 
                 window.addEventListener('message', function(e) {
                     if (!e.data || !e.data.type) return;
@@ -1332,8 +1473,12 @@
                         }
                     } else if (m.type === 'no_audio') {
                         if (_state) { _state.playing = false; updateUI(_state); }
+                        document.getElementById('sa').className = 'sub-area idle';
+                        document.getElementById('sc').textContent = '';
+                        document.getElementById('sn').textContent = '';
+                        document.getElementById('st').style.display = 'block';
                         document.getElementById('st').textContent = '当前没有音频';
-                        document.getElementById('st').className = 'sub-text idle';
+                        _lastSub = '';
                         resetBtns();
                     }
                 });
@@ -1345,13 +1490,57 @@
                 // 通知主页面 PiP 已就绪
                 sendToOpener({type:'pip_ready'});
 
+                var _lastSub = '';
                 function updateUI(m) {
-                    if (!m) { document.getElementById('st').textContent = '等待播放…'; document.getElementById('st').className = 'sub-text idle'; document.getElementById('nm').textContent = '-'; document.getElementById('pn').textContent = ''; resetBtns(); return; }
+                    if (!m) {
+                        document.getElementById('sa').className = 'sub-area idle';
+                        document.getElementById('sc').textContent = '';
+                        document.getElementById('sn').textContent = '';
+                        document.getElementById('st').style.display = 'block';
+                        document.getElementById('st').textContent = '等待播放…';
+                        document.getElementById('nm').textContent = '-';
+                        document.getElementById('pn').textContent = '';
+                        _lastSub = '';
+                        resetBtns(); return;
+                    }
+                    document.getElementById('st').style.display = 'none';
                     var num = (m.index !== undefined) ? (m.index + 1) : '?';
                     document.getElementById('nm').textContent = num;
                     document.getElementById('pn').textContent = '#' + num + ' ' + (m.name || '');
-                    if (m.subtitle) { document.getElementById('st').textContent = m.subtitle; document.getElementById('st').className = 'sub-text'; }
-                    document.getElementById('sa').scrollTop = 0;
+                    // 更新倍速显示
+                    if (m.speed) {
+                        _curSpeed = m.speed;
+                        var spd = document.getElementById('spd');
+                        var label = m.speed.toFixed(2).replace(/0+$/,'').replace(/\.$/,'') + 'x';
+                        if (spd) spd.textContent = label;
+                        var items = document.querySelectorAll('#spdDrop div');
+                        items.forEach(function(el) { el.classList.remove('active'); });
+                        items.forEach(function(el) { if (el.textContent === label) el.classList.add('active'); });
+                    }
+                    if (m.subtitle) {
+                        document.getElementById('sa').className = 'sub-area';
+                        // KTV 切换动画：句子变了触发 fade
+                        if (m.subtitle !== _lastSub) {
+                            var curEl = document.getElementById('sc');
+                            curEl.style.opacity = '0';
+                            setTimeout(function() {
+                                curEl.textContent = m.subtitle;
+                                curEl.style.opacity = '1';
+                            }, 150);
+                            _lastSub = m.subtitle;
+                        } else {
+                            document.getElementById('sc').textContent = m.subtitle;
+                        }
+                        // 下一句预览
+                        var nextEl = document.getElementById('sn');
+                        if (m.next_subtitle) {
+                            nextEl.textContent = m.next_subtitle;
+                            nextEl.style.display = 'block';
+                        } else {
+                            nextEl.textContent = '';
+                            nextEl.style.display = 'none';
+                        }
+                    }
                     updateBtns(m);
                 }
 
@@ -1391,9 +1580,12 @@
                 }
 
                 function showFinished(type) {
+                    document.getElementById('sa').className = 'sub-area idle';
+                    document.getElementById('sc').textContent = '';
+                    document.getElementById('sn').textContent = '';
+                    document.getElementById('st').style.display = 'block';
                     document.getElementById('st').textContent = '播放完成';
-                    document.getElementById('st').className = 'sub-text idle';
-                    document.getElementById('sa').scrollTop = 0;
+                    _lastSub = '';
                     showFinishedBtn(type==='template'?'t':'c', type==='template'?'ft':'fc', type==='template'?'bt':'bc', type==='template'?'ct':'cc', type==='template'?'固定介绍':'拍品亮点');
                     var other = type==='template'?'c':'t';
                     updateBtn(other, 'f'+other, 'b'+other, 'c'+other, other==='t'?'固定介绍':'拍品亮点', false, false, 0, 0, 0);
@@ -1420,15 +1612,61 @@
                     }
                 };
 
+                var _speedRates = [0.75, 1.0, 1.25, 1.5, 2.0];
+                var _curSpeed = 1.0;
+
+                // 构建下拉菜单 + 初始化高亮
+                (function() {
+                    var drop = document.getElementById('spdDrop');
+                    var html = '';
+                    _speedRates.forEach(function(r) {
+                        var label = r.toFixed(2).replace(/0+$/,'').replace(/\.$/,'') + 'x';
+                        var cls = (r === _curSpeed) ? ' class=\"active\"' : '';
+                        html += '<div' + cls + ' onclick=\"pipSetSpeed(' + r + ')\">' + label + '</div>';
+                    });
+                    drop.innerHTML = html;
+                })();
+
+                window.pipToggleSpeed = function() {
+                    var drop = document.getElementById('spdDrop');
+                    drop.classList.toggle('show');
+                };
+
+                window.pipSetSpeed = function(rate) {
+                    _curSpeed = rate;
+                    var spd = document.getElementById('spd');
+                    if (spd) spd.textContent = rate.toFixed(2).replace(/0+$/,'').replace(/\.$/,'') + 'x';
+                    // 高亮当前选项
+                    var items = document.querySelectorAll('#spdDrop div');
+                    items.forEach(function(el) { el.classList.remove('active'); });
+                    var label = rate.toFixed(2).replace(/0+$/,'').replace(/\.$/,'') + 'x';
+                    items.forEach(function(el) { if (el.textContent === label) el.classList.add('active'); });
+                    document.getElementById('spdDrop').classList.remove('show');
+                    sendToOpener({type:'control', action:'set_speed', speed: rate, index: _state ? _state.index : 0});
+                };
+
+                // 点击空白关闭下拉
+                document.addEventListener('click', function(e) {
+                    if (!e.target.closest('.speed-wrap')) {
+                        document.getElementById('spdDrop').classList.remove('show');
+                    }
+                });
+
                 window.pipNav = function(delta) {
-                    var curIdx = _state ? _state.index : 0;
-                    var action = delta < 0 ? 'prev_item' : 'next_item';
+                    var curIdx = _state ? _state.index : (_pendingIndex !== null ? _pendingIndex : 0);
+                    var targetIdx = curIdx + delta;
+                    if (targetIdx < 0) return;  // 已是第一件，不再往前
+                    _pendingIndex = targetIdx;
                     _state = null; _finished = {};
+                    document.getElementById('sa').className = 'sub-area idle';
+                    document.getElementById('sc').textContent = '';
+                    document.getElementById('sn').textContent = '';
+                    document.getElementById('st').style.display = 'block';
                     document.getElementById('st').textContent = '等待播放…';
-                    document.getElementById('st').className = 'sub-text idle';
-                    document.getElementById('sa').scrollTop = 0;
+                    document.getElementById('nm').textContent = targetIdx + 1;
+                    _lastSub = '';
                     resetBtns();
-                    sendToOpener({type:'control', action:action, index:curIdx});
+                    sendToOpener({type:'control', action:'select_item', index:targetIdx});
                 };
             }.toString() + ')();';
         }
@@ -1457,6 +1695,7 @@
             var btn = document.getElementById(type === 'template' ? 'batchTemplateBtn' : 'batchCommentaryBtn');
             var progressEl = document.getElementById('batchProgress');
             var voice = document.getElementById('globalVoice').value;
+            var speed = parseFloat(document.getElementById('globalSpeed').value) || 1.0;
             btn.textContent = '⏹ 停止';
             btn.style.background = '#e74c3c';
             progressEl.style.display = 'inline';
@@ -1472,11 +1711,13 @@
                 if (!text || text.length < 5) continue;
                 progressEl.textContent = label + ': ' + done + '/' + total;
                 try {
-                    var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type}), cache:'no-store' });
+                    var resp = await fetch('/api/tts', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text:text, voice:voice, index:idx, audio_type:type, speed:speed}), cache:'no-store' });
                     if (resp.ok) {
                         if (type === 'template') data._has_template_audio = true;
                         else data._has_commentary_audio = true;
                         updateAudioStatus(idx);
+                        // 立即加载音频播放器到展开区
+                        loadCachedAudioIfExists(idx, type);
                         done++;
                     }
                 } catch(e) {}

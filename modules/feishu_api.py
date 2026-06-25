@@ -50,7 +50,7 @@ FIELD_NAME_MAP = {
     "品相": "condition",
     "描述": "description",
     "拍品描述": "description",
-    "原矿/证书": "certificate",
+    "原盒/证书": "certificate",
     "标识": "marking",
     "加价幅度": "bid_increment",
     "落槌价": "hammer_price",

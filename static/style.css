@@ -364,6 +364,14 @@ body {
     flex-shrink: 0; transition: all 0.2s;
 }
 .audio-regen-btn:hover { background: #f0f0f0; }
+.audio-speed-btn {
+    padding: 4px 8px; border: 1px solid #e67e22; color: #e67e22;
+    background: #fff; border-radius: 4px; cursor: pointer;
+    font-size: 0.8em; font-weight: 700; flex-shrink: 0;
+    font-variant-numeric: tabular-nums; min-width: 42px;
+    transition: all 0.2s;
+}
+.audio-speed-btn:hover { background: #fdf2e9; }
 
 /* 下载按钮 */
 .audio-download-btn {

@@ -35,6 +35,13 @@ VOLCANO_TTS_VOICE = os.getenv("VOLCANO_TTS_VOICE", "zh_male_wennuanahu_uranus_bi
 VOLCANO_TTS_RESOURCE_ID = os.getenv("VOLCANO_TTS_RESOURCE_ID", "seed-tts-2.0")
 VOLCANO_TTS_CONTEXT = os.getenv("VOLCANO_TTS_CONTEXT", "")
 
+# 竞品 Excel 数据目录（分号分隔多个路径，不存在则跳过）
+COMPETITOR_DIRS = os.getenv("COMPETITOR_DIRS",
+    r"D:\北京丰讯\北京丰讯-小茶书产品\行情\金刚葫芦娃;"
+    r"D:\北京丰讯\北京丰讯-小茶书产品\行情\七个点转赚;"
+    r"D:\北京丰讯\北京丰讯-小茶书产品\行情\春风颐和"
+)
+
 # 服务配置
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8000"))

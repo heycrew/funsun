@@ -616,6 +616,7 @@ class TTSRequest(BaseModel):
     voice: str = ""
     index: int = -1
     audio_type: str = "commentary"  # commentary 或 template
+    speed: float = 1.0  # 生成倍速 0.5~2.0
 
 
 @app.post("/api/tts")
@@ -658,6 +659,7 @@ async def text_to_speech(req: TTSRequest):
                         "text": text,
                         "speaker": voice,
                         "audio_params": {"format": "mp3", "sample_rate": 24000},
+                        "speech_rate": round((req.speed - 1.0) * 100),
                         "additions": json.dumps({"context_texts": tts_ctx}) if tts_ctx else None,
                     },
                 },
