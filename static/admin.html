@@ -120,7 +120,7 @@ function showTab(n,el){
     for(var i=0;i<links.length;i++) links[i].classList.remove('active');
     el.classList.add('active');
     if(n==='users') loadUsers();
-    if(n==='api'||n==='prompt') loadConfig();
+    if(n==='api'||n==='prompt'||n==='shortcuts') loadConfig();
 }
 
 // 提示消息
