@@ -361,7 +361,7 @@
         });
 
         // ===== 看板快捷键 (服务端配置, 跨设备同步, 空值=禁用) =====
-        var _pipShortcuts = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
+        var _pipShortcuts = {prev:'',next:'',tpl:'',cmt:''};
         (function(){
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '/api/admin/config', true);
@@ -371,12 +371,11 @@
                         var d=JSON.parse(xhr.responseText);
                         if(d.pip_shortcuts){
                             var sc = d.pip_shortcuts;
-                            // 服务端已配置则覆盖, 空字符串保留(表示禁用)
                             _pipShortcuts = {
-                                prev: sc.prev !== undefined ? sc.prev : 'ArrowLeft',
-                                next: sc.next !== undefined ? sc.next : 'ArrowRight',
-                                tpl:  sc.tpl  !== undefined ? sc.tpl  : 'T',
-                                cmt:  sc.cmt  !== undefined ? sc.cmt  : 'C'
+                                prev: sc.prev !== undefined ? sc.prev : '',
+                                next: sc.next !== undefined ? sc.next : '',
+                                tpl:  sc.tpl  !== undefined ? sc.tpl  : '',
+                                cmt:  sc.cmt  !== undefined ? sc.cmt  : ''
                             };
                         }
                     }catch(e){}

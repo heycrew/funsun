@@ -222,19 +222,20 @@ function doChangePw(){
     };
     function keyLabel(k) { return KEY_NAMES[k] || k; }
 
-    var def = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
-    var cur = def;
+    var def = {prev:'',next:'',tpl:'',cmt:''};
+    var cur = {};
 
     var ids = ['skPrev','skNext','skTpl','skCmt'];
     var keys = ['prev','next','tpl','cmt'];
 
     function initShortcuts(cfg){
         if(cfg) cur = cfg;
-        for(var k in def) if(!cur[k]) cur[k]=def[k];
+        for(var k in def) if(cur[k]===undefined) cur[k]=def[k];
         for(var i=0;i<ids.length;i++){
             var el = document.getElementById(ids[i]);
-            el.value = keyLabel(cur[keys[i]]);
-            el.setAttribute('data-key', cur[keys[i]]);
+            var v2 = cur[keys[i]] || '';
+            el.value = v2 ? keyLabel(v2) : '-';
+            el.setAttribute('data-key', v2);
         }
     }
 
