@@ -360,15 +360,26 @@
             }
         });
 
-        // ===== 看板快捷键 (服务端配置, 跨设备同步) =====
+        // ===== 看板快捷键 (服务端配置, 跨设备同步, 空值=禁用) =====
         var _pipShortcuts = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
-        // 异步加载服务端快捷键配置
         (function(){
             var xhr = new XMLHttpRequest();
             xhr.open('GET', '/api/admin/config', true);
             xhr.onload = function(){
                 if(xhr.status===200){
-                    try{ var d=JSON.parse(xhr.responseText); if(d.pip_shortcuts) _pipShortcuts=d.pip_shortcuts; }catch(e){}
+                    try{
+                        var d=JSON.parse(xhr.responseText);
+                        if(d.pip_shortcuts){
+                            var sc = d.pip_shortcuts;
+                            // 服务端已配置则覆盖, 空字符串保留(表示禁用)
+                            _pipShortcuts = {
+                                prev: sc.prev !== undefined ? sc.prev : 'ArrowLeft',
+                                next: sc.next !== undefined ? sc.next : 'ArrowRight',
+                                tpl:  sc.tpl  !== undefined ? sc.tpl  : 'T',
+                                cmt:  sc.cmt  !== undefined ? sc.cmt  : 'C'
+                            };
+                        }
+                    }catch(e){}
                 }
             };
             xhr.send();
@@ -379,10 +390,12 @@
             var sk = _pipShortcuts;
             var rawKey = e.key === ' ' ? 'Space' : e.key;
             var key = rawKey.length === 1 ? rawKey.toUpperCase() : rawKey;
-            var prev = sk.prev || 'ArrowLeft';
-            var next = sk.next || 'ArrowRight';
-            var tpl  = (sk.tpl || 'T');
-            var cmt  = (sk.cmt || 'C');
+            var prev = sk.prev;
+            var next = sk.next;
+            var tpl  = sk.tpl;
+            var cmt  = sk.cmt;
+            // 空值 = 已禁用，不匹配任何键
+            if (!prev && !next && !tpl && !cmt) return;
             function keyMatch(a,b) { return a.length===1&&b.length===1 ? a.toUpperCase()===b.toUpperCase() : a===b; }
 
             if (keyMatch(key, prev) || keyMatch(key, next)) {

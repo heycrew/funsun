@@ -92,6 +92,7 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
             <tr><td>拍品亮点 播放/暂停</td><td><input id="skCmt" class="sk-inp" maxlength="1" placeholder="C"></td><td style="color:#aaa;font-size:.8em">默认: C</td></tr>
         </table>
         <button class="btn" onclick="doSaveShortcuts()" style="margin-top:12px">保存快捷键</button>
+        <button class="btn" onclick="doResetShortcuts()" style="margin-top:12px;margin-left:8px;background:#e74c3c">重置</button>
         <span id="skMsg" style="margin-left:12px;font-size:.85em"></span>
     </div>
 </div>
@@ -259,6 +260,27 @@ function doChangePw(){
     }
 
     window.initShortcuts = initShortcuts;
+    window.doResetShortcuts = function(){
+        if(!confirm('重置后所有快捷键将失效，看板无法通过键盘控制。确认重置？')) return;
+        var empty = {prev:'',next:'',tpl:'',cmt:''};
+        var msgEl = document.getElementById('skMsg');
+        msgEl.textContent = '重置中...';
+        fetch('/api/admin/config').then(function(r){return r.json()}).then(function(cfg){
+            cfg.pip_shortcuts = empty;
+            return fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+        }).then(function(r){
+            if(r.ok){
+                // 清空输入框
+                for(var i=0;i<ids.length;i++){
+                    var el = document.getElementById(ids[i]);
+                    el.value = '-';
+                    el.setAttribute('data-key', '');
+                }
+                msgEl.textContent = '已重置';
+                setTimeout(function(){msgEl.textContent='';},2000);
+            }
+        }).catch(function(){ msgEl.textContent = '重置失败'; });
+    };
     window.doSaveShortcuts = function(){
         var n = {};
         for(var i=0;i<ids.length;i++){
