@@ -104,10 +104,14 @@ def update_market_covers(covers: dict[str, str]):
         logger.info(f"封面图缓存已更新: {len(covers)} 条")
 
 
-def clear_all_audio():
-    """清空全部音频文件"""
+def clear_all_audio() -> int:
+    """清空全部音频文件，返回删除数量"""
+    count = 0
     for f in AUDIO_DIR.glob("*.mp3"):
         f.unlink()
+        count += 1
+    logger.info(f"已清空 {count} 个音频文件")
+    return count
 
 
 def save_audio(index: int, audio_bytes: bytes, audio_type: str = "commentary"):

@@ -574,6 +574,17 @@ async def predict_revenue(req: RevenuePredictRequest):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/cache/clear-all-audio")
+async def clear_all_audio():
+    """清空所有拍品的音频文件"""
+    try:
+        from modules.snapshot_cache import clear_all_audio
+        count = clear_all_audio()
+        return {"ok": True, "count": count}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 @app.get("/api/admin/competitor/status")
 async def competitor_status():
     """竞品数据状态查询"""
@@ -929,6 +940,7 @@ async def analyze_all(feishu_url: str = Query(...), force: bool = Query(False)):
                         "capacity": pd["item"].get("capacity", ""),
                         "material": pd["item"].get("material", ""), "code": pd["item"].get("code", ""),
                         "condition": pd["item"].get("condition", ""),
+                        "certificate": pd["item"].get("certificate", ""),
                         "description": pd["item"].get("description", ""),
                         "xiaochashu_records": pd["records"][:10],
                         "commentary": c, "market_analysis": pd["market"],
@@ -950,6 +962,14 @@ async def analyze_all(feishu_url: str = Query(...), force: bool = Query(False)):
                             "kiln": pd["item"].get("kiln", ""),
                             "commentary": "",
                             "template_text": "",
+                            "inscription": pd["item"].get("inscription", ""),
+                            "starting_price": pd["item"].get("starting_price", ""),
+                            "estimate": pd["item"].get("estimate", ""),
+                            "era": pd["item"].get("era", ""), "size": pd["item"].get("size", ""),
+                            "capacity": pd["item"].get("capacity", ""),
+                            "material": pd["item"].get("material", ""), "code": pd["item"].get("code", ""),
+                            "condition": pd["item"].get("condition", ""),
+                            "certificate": pd["item"].get("certificate", ""),
                             "market_analysis": pd.get("market", ""),
                             "xiaochashu_records": pd.get("records", [])[:10],
                             "obsidian_kiln_url": pd.get("obs_url", ""),

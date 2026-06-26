@@ -584,10 +584,20 @@ async def predict_session_revenue(
     final_best = int(w1 * s1["best"] + w2 * s2["best"])
     final_high = int(w1 * s1["high"] + w2 * s2["high"])
 
-    # 连续校准曲线 (回测286场迭代校准)
-    # S2越大 → 系统性低估越严重 → 矫正曲线更陡
+    # 连续校准曲线 (修正: S2<200K不加矫, 避免小型分散场过度拉升)
     s2_anchor = max(s2["best"], 50000)
-    tier_boost = min(2.5, 1.0 + 0.77 * (s2_anchor / 300000))
+    if s2_anchor > 200000:
+        tier_boost = min(2.5, 1.0 + 0.77 * ((s2_anchor - 200000) / 300000))
+    else:
+        tier_boost = 1.0
+
+    # 窑口分散惩罚: 春风祥玉+老贵占比<25%且窑口数>12 → 降低20%
+    kiln_dist = defaultdict(int)
+    for it in items:
+        kiln_dist[_norm_kiln(it.get("kiln", ""))] += 1
+    cx_ratio2 = sum(1 for k in kiln_dist if "春风祥玉" in k) / total_items if total_items > 0 else 0
+    if cx_ratio2 < 0.25 and len(kiln_dist) > 12:
+        tier_boost *= 0.80
 
     # 周六额外校准
     dow_boost = 1.0

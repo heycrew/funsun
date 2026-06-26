@@ -76,6 +76,7 @@
                     </select>
                     <button class="batch-btn" onclick="batchGenerate('template')" id="batchTemplateBtn">📋 批量生成固定介绍</button>
                     <button class="batch-btn" onclick="batchGenerate('commentary')" id="batchCommentaryBtn">🎙 批量生成拍品亮点</button>
+                    <button class="batch-btn" onclick="clearAllAudio()" style="background:#e74c3c" title="清空清单中所有拍品的音频文件">🗑 清空音频</button>
                     <span class="batch-progress" id="batchProgress" style="display:none"></span>
                 </div>
                 <div class="table-wrap">
@@ -209,18 +210,35 @@
                     }
                     break;
                 case 'select_item':
-                    // 看板连接后自动展开指定拍品
                     var targetIdx = msg.index;
-                    if (targetIdx !== undefined && allItems[targetIdx]) {
+                    if (targetIdx !== undefined && targetIdx >= 0 && targetIdx < allItems.length) {
+                        // 停止所有正在播放的音频并重置进度
+                        Object.keys(audioState).forEach(function(k) {
+                            if (audioState[k] && audioState[k].playing) {
+                                audioState[k].audio.pause();
+                                audioState[k].audio.currentTime = 0;
+                                audioState[k].playing = false;
+                                renderDualControls(audioState[k].idx, audioState[k].type);
+                            }
+                        });
+                        // 收起旧的
                         if (expandedRow !== null && expandedRow !== targetIdx) {
-                            toggleExpand(expandedRow);
+                            var oldExpand = document.getElementById('expand-' + expandedRow);
+                            if (oldExpand) oldExpand.classList.add('hidden');
                         }
-                        if (expandedRow !== targetIdx) {
-                            toggleExpand(targetIdx);
+                        // 展开新的（如果 data 就绪），同时强制更新 expandedRow
+                        var hasData = resultsMap[targetIdx];
+                        if (hasData) {
+                            renderExpandContent(targetIdx, hasData);
+                            var newExpand = document.getElementById('expand-' + targetIdx);
+                            if (newExpand) newExpand.classList.remove('hidden');
+                            loadCachedAudioIfExists(targetIdx, 'template');
+                            loadCachedAudioIfExists(targetIdx, 'commentary');
                         }
-                        // 立即推送拍品基础信息给看板（不等音频播放）
-                        var info = resultsMap[targetIdx] || allItems[targetIdx];
-                        wsSend({
+                        expandedRow = targetIdx;
+                        // 推送给 PiP（无论 data 是否就绪）
+                        var info = hasData || allItems[targetIdx];
+                        var selMsg = {
                             type: 'playback_state',
                             index: targetIdx,
                             name: (info && info.name) || allItems[targetIdx].name || '',
@@ -230,25 +248,19 @@
                             duration: 0,
                             subtitle: '',
                             progress: 0
-                        });
+                        };
+                        wsSend(selMsg);
+                        sendToPip(selMsg);
                     }
                     break;
                 case 'prev_item':
                 case 'next_item':
-                    // 重置当前拍品所有音频进度
+                    var delta = msg.action === 'prev_item' ? -1 : +1;
                     if (expandedRow !== null) {
-                        Object.keys(audioState).forEach(function(k) {
-                            if (audioState[k] && audioState[k].idx === expandedRow) {
-                                audioState[k].audio.pause();
-                                audioState[k].audio.currentTime = 0;
-                                audioState[k].playing = false;
-                            }
-                        });
-                    }
-                    if (msg.action === 'prev_item' && expandedRow !== null && expandedRow > 0 && allItems[expandedRow - 1]) {
-                        toggleExpand(expandedRow - 1);
-                    } else if (msg.action === 'next_item' && expandedRow !== null && expandedRow < allItems.length - 1 && allItems[expandedRow + 1]) {
-                        toggleExpand(expandedRow + 1);
+                        var tIdx = expandedRow + delta;
+                        if (tIdx >= 0 && tIdx < allItems.length) {
+                            toggleExpand(tIdx);
+                        }
                     }
                     break;
                 case 'cycle_speed':
@@ -345,6 +357,48 @@
                 wsHandleControl(e.data);
             } else if (e.data.type === 'pip_ready') {
                 sendCurrentStateToPip();
+            }
+        });
+
+        // ===== 看板快捷键 (防抖: 300ms内忽略重复触发) =====
+        var _lastNavTime = 0;
+        document.addEventListener('keydown', function(e) {
+            if (!_pipWin) return;
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+            var sk = {};
+            try { sk = JSON.parse(localStorage.getItem('pip_shortcuts') || '{}'); } catch(ex) {}
+            var rawKey = e.key === ' ' ? 'Space' : e.key;
+            var key = rawKey.length === 1 ? rawKey.toUpperCase() : rawKey;
+            var prev = sk.prev || 'ArrowLeft';
+            var next = sk.next || 'ArrowRight';
+            var tpl  = (sk.tpl || 'T');
+            var cmt  = (sk.cmt || 'C');
+            function keyMatch(a,b) { return a.length===1&&b.length===1 ? a.toUpperCase()===b.toUpperCase() : a===b; }
+
+            if (keyMatch(key, prev) || keyMatch(key, next)) {
+                e.preventDefault();
+                e.stopPropagation();
+                var now = Date.now();
+                if (now - _lastNavTime < 300) return;
+                _lastNavTime = now;
+                var delta = keyMatch(key, prev) ? -1 : +1;
+                var targetIdx = (expandedRow !== null ? expandedRow : 0) + delta;
+                if (targetIdx >= 0 && targetIdx < allItems.length) {
+                    // 走 select_item 统一路径（已含音频停止+PiP推送）
+                    wsHandleControl({type:'control', action:'select_item', index:targetIdx});
+                }
+            }
+            else if (keyMatch(key, tpl)) {
+                e.preventDefault();
+                if (expandedRow !== null) {
+                    wsHandleControl({type:'control',action:'toggle',index:expandedRow,audio_type:'template'});
+                }
+            }
+            else if (keyMatch(key, cmt)) {
+                e.preventDefault();
+                if (expandedRow !== null) {
+                    wsHandleControl({type:'control',action:'toggle',index:expandedRow,audio_type:'commentary'});
+                }
             }
         });
 
@@ -649,10 +703,11 @@
             if (!data) return;
 
             if (expandedRow === idx) {
-                // 停止所有音频
+                // 停止所有音频并重置进度
                 Object.keys(audioState).forEach(function(k) {
-                    if (audioState[k] && audioState[k].playing) {
+                    if (audioState[k]) {
                         audioState[k].audio.pause();
+                        audioState[k].audio.currentTime = 0;
                         audioState[k].playing = false;
                     }
                 });
@@ -664,10 +719,11 @@
                 if (expandedRow !== null) {
                     document.getElementById(`expand-${expandedRow}`).classList.add('hidden');
                 }
-                // 停止所有正在播放的音频
+                // 停止所有音频并重置进度
                 Object.keys(audioState).forEach(function(k) {
-                    if (audioState[k] && audioState[k].playing) {
+                    if (audioState[k]) {
                         audioState[k].audio.pause();
+                        audioState[k].audio.currentTime = 0;
                         audioState[k].playing = false;
                     }
                 });
@@ -676,8 +732,8 @@
                 document.getElementById(`expand-${idx}`).classList.remove('hidden');
                 expandedRow = idx;
                 document.getElementById(`expand-${idx}`).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                // 通知看板当前展开的拍品
-                wsSend({
+                // 通知看板当前展开的拍品（WS + 直推 PiP，因 WS 不回显）
+                var stateMsg = {
                     type: 'playback_state',
                     index: idx,
                     name: data.name || '',
@@ -687,7 +743,9 @@
                     duration: 0,
                     subtitle: '',
                     progress: 0
-                });
+                };
+                wsSend(stateMsg);
+                sendToPip(stateMsg);
                 // 检查并加载缓存的音频
                 loadCachedAudioIfExists(idx, 'template');
                 loadCachedAudioIfExists(idx, 'commentary');
@@ -1004,11 +1062,18 @@
             var key = getAudioKey(idx, type); var st = audioState[key]; if (!st) return;
             if (st.playing) { st.audio.pause(); st.playing = false; }
             else {
-                Object.keys(audioState).forEach(function(k){ if(k!=key&&audioState[k]&&audioState[k].playing){audioState[k].audio.pause();audioState[k].playing=false;renderDualControls(audioState[k].idx,audioState[k].type);} });
+                // 停止同拍品其他音频并重置进度
+                Object.keys(audioState).forEach(function(k){
+                    if(k!=key && audioState[k] && audioState[k].idx === idx && audioState[k].playing){
+                        audioState[k].audio.pause();
+                        audioState[k].audio.currentTime = 0;
+                        audioState[k].playing = false;
+                        renderDualControls(audioState[k].idx, audioState[k].type);
+                    }
+                });
                 st.audio.play(); st.playing = true;
             }
             renderDualControls(idx, type);
-            // 立即推送状态
             _wsLastSend = 0;
             updateDualProgress(idx, type);
         }
@@ -1729,6 +1794,31 @@
             btn.style.background = '';
             progressEl.textContent = '完成 ' + done + '/' + total;
             setTimeout(function() { progressEl.style.display = 'none'; }, 3000);
+        }
+
+        // ===== 清空所有音频 =====
+        async function clearAllAudio() {
+            if (!confirm('确认清空清单中所有拍品的音频文件？此操作不可恢复。')) return;
+            try {
+                var resp = await fetch('/api/cache/clear-all-audio', { method: 'POST' });
+                var data = await resp.json();
+                if (data.ok) {
+                    // 更新前端音频状态
+                    for (var i = 0; i < allItems.length; i++) {
+                        var idx = allItems[i].index !== undefined ? allItems[i].index : i;
+                        if (resultsMap[idx]) {
+                            resultsMap[idx]._has_template_audio = false;
+                            resultsMap[idx]._has_commentary_audio = false;
+                        }
+                        updateAudioStatus(idx);
+                    }
+                    alert('已清空 ' + data.count + ' 个音频文件');
+                } else {
+                    alert('清空失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('清空失败: ' + e.message);
+            }
         }
 
         // ===== 自动加载缓存 =====

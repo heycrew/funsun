@@ -36,6 +36,7 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
     <a onclick="showTab('api',this)">API配置</a>
     <a onclick="showTab('prompt',this)">提示词管理</a>
     <a onclick="showTab('password',this)">修改密码</a>
+    <a onclick="showTab('shortcuts',this)">快捷键</a>
 </div>
 <div class="content">
 <div id="msg"></div>
@@ -77,6 +78,20 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
         <label>旧密码</label><input id="oldPw" type="password">
         <label>新密码</label><input id="newPw" type="password">
         <button class="btn" onclick="doChangePw()">修改密码</button>
+    </div>
+</div>
+
+<div id="tab-shortcuts" class="tab">
+    <div class="card"><h3>桌面看板快捷键</h3>
+        <p style="color:#888;margin-bottom:16px">设置后刷新主页面生效。留空则恢复默认。</p>
+        <table>
+            <tr><td>上一件</td><td><input id="skPrev" class="sk-inp" maxlength="1" placeholder="←"></td><td style="color:#aaa;font-size:.8em">默认: ArrowLeft</td></tr>
+            <tr><td>下一件</td><td><input id="skNext" class="sk-inp" maxlength="1" placeholder="→"></td><td style="color:#aaa;font-size:.8em">默认: ArrowRight</td></tr>
+            <tr><td>固定介绍 播放/暂停</td><td><input id="skTpl" class="sk-inp" maxlength="1" placeholder="T"></td><td style="color:#aaa;font-size:.8em">默认: T</td></tr>
+            <tr><td>拍品亮点 播放/暂停</td><td><input id="skCmt" class="sk-inp" maxlength="1" placeholder="C"></td><td style="color:#aaa;font-size:.8em">默认: C</td></tr>
+        </table>
+        <button class="btn" onclick="doSaveShortcuts()" style="margin-top:12px">保存快捷键</button>
+        <span id="skMsg" style="margin-left:12px;font-size:.85em"></span>
     </div>
 </div>
 </div>
@@ -187,6 +202,26 @@ function doSavePrompt(){
     fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(gCfg)})
     .then(function(){toast('提示词已保存',true)});
 }
+// 快捷键
+(function(){
+    var def = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
+    try{var s=JSON.parse(localStorage.getItem('pip_shortcuts')||'{}');for(var k in def)if(!s[k])s[k]=def[k];}catch(e){s=def;}
+    document.getElementById('skPrev').value = (s.prev===def.prev?'':s.prev);
+    document.getElementById('skNext').value = (s.next===def.next?'':s.next);
+    document.getElementById('skTpl').value = (s.tpl===def.tpl?'':s.tpl);
+    document.getElementById('skCmt').value = (s.cmt===def.cmt?'':s.cmt);
+    window.doSaveShortcuts = function(){
+        var def2 = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
+        var n = {};
+        n.prev = document.getElementById('skPrev').value || def2.prev;
+        n.next = document.getElementById('skNext').value || def2.next;
+        n.tpl  = document.getElementById('skTpl').value  || def2.tpl;
+        n.cmt  = document.getElementById('skCmt').value  || def2.cmt;
+        localStorage.setItem('pip_shortcuts', JSON.stringify(n));
+        document.getElementById('skMsg').textContent = '已保存';
+        setTimeout(function(){document.getElementById('skMsg').textContent='';},2000);
+    };
+})();
 function doChangePw(){
     var o=document.getElementById('oldPw').value;
     var n=document.getElementById('newPw').value;
