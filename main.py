@@ -194,7 +194,9 @@ def _load_config() -> dict:
 
 def _save_config(cfg: dict):
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    existing = _load_config()
+    existing.update(cfg)
+    CONFIG_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @app.get("/admin", response_class=HTMLResponse)

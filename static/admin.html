@@ -264,9 +264,16 @@ function doChangePw(){
         for(var i=0;i<ids.length;i++){
             n[keys[i]] = document.getElementById(ids[i]).getAttribute('data-key') || def[keys[i]];
         }
-        gCfg.pip_shortcuts = n;
-        fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(gCfg)})
-        .then(function(r){ if(r.ok){ document.getElementById('skMsg').textContent='已保存'; setTimeout(function(){document.getElementById('skMsg').textContent='';},2000); } });
+        var msgEl = document.getElementById('skMsg');
+        msgEl.textContent = '保存中...';
+        // 先拉取服务端全量配置，合并后再保存（避免覆盖其他设置）
+        fetch('/api/admin/config').then(function(r){return r.json()}).then(function(cfg){
+            cfg.pip_shortcuts = n;
+            return fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+        }).then(function(r){
+            if(r.ok){ msgEl.textContent='已保存'; setTimeout(function(){msgEl.textContent='';},2000); }
+            else{ msgEl.textContent='保存失败'; }
+        }).catch(function(){ msgEl.textContent='保存失败'; });
     };
 })();
 </script>
