@@ -360,13 +360,16 @@
             }
         });
 
-        // ===== 看板快捷键 (防抖: 300ms内忽略重复触发) =====
+        // ===== 看板快捷键 (服务端配置, 跨设备同步) =====
+        var _pipShortcuts = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
+        fetch('/api/admin/config').then(function(r){return r.json()}).then(function(d){
+            if(d.pip_shortcuts) _pipShortcuts = d.pip_shortcuts;
+        }).catch(function(){});
         var _lastNavTime = 0;
         document.addEventListener('keydown', function(e) {
             if (!_pipWin) return;
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-            var sk = {};
-            try { sk = JSON.parse(localStorage.getItem('pip_shortcuts') || '{}'); } catch(ex) {}
+            var sk = _pipShortcuts;
             var rawKey = e.key === ' ' ? 'Space' : e.key;
             var key = rawKey.length === 1 ? rawKey.toUpperCase() : rawKey;
             var prev = sk.prev || 'ArrowLeft';

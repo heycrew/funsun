@@ -239,6 +239,7 @@ async def admin_get_config(request: Request):
     cfg.setdefault("deepseek_model", os.getenv("DEEPSEEK_MODEL", "deepseek-chat"))
     cfg.setdefault("commentary_template", "第[序号]号拍品,来自[拍品名字],窑口[窑口],款识[款识],年份[年份],尺寸[尺寸],容量[容量],品相[品相],市场参考价[参考价]")
     cfg.setdefault("ai_query_prompt", "请根据以上拍品信息,在知识库中查找对应的窑口背景、器型特点、画片题材和工艺技法,生成一段专业的拍卖解说词。")
+    cfg.setdefault("pip_shortcuts", {"prev": "ArrowLeft", "next": "ArrowRight", "tpl": "T", "cmt": "C"})
     return cfg
 
 
