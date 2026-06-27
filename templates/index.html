@@ -360,52 +360,31 @@
             }
         });
 
-        // ===== 看板快捷键 (服务端配置, 跨设备同步, 空值=禁用) =====
-        var _pipShortcuts = {prev:'',next:'',tpl:'',cmt:''};
-        (function(){
-            var xhr = new XMLHttpRequest();
-            xhr.open('GET', '/api/admin/config', true);
-            xhr.onload = function(){
-                if(xhr.status===200){
-                    try{
-                        var d=JSON.parse(xhr.responseText);
-                        if(d.pip_shortcuts){
-                            var sc = d.pip_shortcuts;
-                            _pipShortcuts = {
-                                prev: sc.prev !== undefined ? sc.prev : '',
-                                next: sc.next !== undefined ? sc.next : '',
-                                tpl:  sc.tpl  !== undefined ? sc.tpl  : '',
-                                cmt:  sc.cmt  !== undefined ? sc.cmt  : ''
-                            };
-                        }
-                    }catch(e){}
-                }
-            };
-            xhr.send();
-        })();
+        // ===== 看板快捷键 (防抖: 300ms内忽略重复触发) =====
         var _lastNavTime = 0;
         document.addEventListener('keydown', function(e) {
+            if (!_pipWin) return;
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-            var sk = _pipShortcuts;
+            var sk = {};
+            try { sk = JSON.parse(localStorage.getItem('pip_shortcuts') || '{}'); } catch(ex) {}
             var rawKey = e.key === ' ' ? 'Space' : e.key;
             var key = rawKey.length === 1 ? rawKey.toUpperCase() : rawKey;
-            var prev = sk.prev;
-            var next = sk.next;
-            var tpl  = sk.tpl;
-            var cmt  = sk.cmt;
-            // 空值 = 已禁用，不匹配任何键
-            if (!prev && !next && !tpl && !cmt) return;
+            var prev = sk.prev || 'ArrowLeft';
+            var next = sk.next || 'ArrowRight';
+            var tpl  = (sk.tpl || 'T');
+            var cmt  = (sk.cmt || 'C');
             function keyMatch(a,b) { return a.length===1&&b.length===1 ? a.toUpperCase()===b.toUpperCase() : a===b; }
 
             if (keyMatch(key, prev) || keyMatch(key, next)) {
-                if (!_pipWin) return; // 导航需要看板
-                e.preventDefault(); e.stopPropagation();
+                e.preventDefault();
+                e.stopPropagation();
                 var now = Date.now();
                 if (now - _lastNavTime < 300) return;
                 _lastNavTime = now;
                 var delta = keyMatch(key, prev) ? -1 : +1;
                 var targetIdx = (expandedRow !== null ? expandedRow : 0) + delta;
                 if (targetIdx >= 0 && targetIdx < allItems.length) {
+                    // 走 select_item 统一路径（已含音频停止+PiP推送）
                     wsHandleControl({type:'control', action:'select_item', index:targetIdx});
                 }
             }

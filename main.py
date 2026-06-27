@@ -194,9 +194,7 @@ def _load_config() -> dict:
 
 def _save_config(cfg: dict):
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    existing = _load_config()
-    existing.update(cfg)
-    CONFIG_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    CONFIG_FILE.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -241,7 +239,6 @@ async def admin_get_config(request: Request):
     cfg.setdefault("deepseek_model", os.getenv("DEEPSEEK_MODEL", "deepseek-chat"))
     cfg.setdefault("commentary_template", "第[序号]号拍品,来自[拍品名字],窑口[窑口],款识[款识],年份[年份],尺寸[尺寸],容量[容量],品相[品相],市场参考价[参考价]")
     cfg.setdefault("ai_query_prompt", "请根据以上拍品信息,在知识库中查找对应的窑口背景、器型特点、画片题材和工艺技法,生成一段专业的拍卖解说词。")
-    cfg.setdefault("pip_shortcuts", {"prev": "", "next": "", "tpl": "", "cmt": ""})
     return cfg
 
 
