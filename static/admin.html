@@ -92,7 +92,6 @@ td{padding:10px;border-bottom:1px solid #f0f0f0}
             <tr><td>拍品亮点 播放/暂停</td><td><input id="skCmt" class="sk-inp" maxlength="1" placeholder="C"></td><td style="color:#aaa;font-size:.8em">默认: C</td></tr>
         </table>
         <button class="btn" onclick="doSaveShortcuts()" style="margin-top:12px">保存快捷键</button>
-        <button class="btn" onclick="doResetShortcuts()" style="margin-top:12px;margin-left:8px;background:#e74c3c">重置</button>
         <span id="skMsg" style="margin-left:12px;font-size:.85em"></span>
     </div>
 </div>
@@ -121,7 +120,7 @@ function showTab(n,el){
     for(var i=0;i<links.length;i++) links[i].classList.remove('active');
     el.classList.add('active');
     if(n==='users') loadUsers();
-    if(n==='api'||n==='prompt'||n==='shortcuts') loadConfig();
+    if(n==='api'||n==='prompt') loadConfig();
 }
 
 // 提示消息
@@ -170,7 +169,6 @@ function loadConfig(){
         var pdLines = [];
         for(var k in pd) pdLines.push(k + '=' + pd[k]);
         document.getElementById('pronDict').value = pdLines.join('\n');
-        initShortcuts(d.pip_shortcuts);
     });
 }
 function toggleApiKey(){
@@ -212,7 +210,7 @@ function doChangePw(){
     fetch('/api/admin/change-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:o,new_password:n})})
     .then(function(r){if(r.ok)toast('密码已修改',true);else toast('旧密码错误')});
 }
-// 快捷键 — 存服务端 config，跨设备同步
+// 快捷键
 (function(){
     var KEY_NAMES = {
         'ArrowLeft':'←','ArrowRight':'→','ArrowUp':'↑','ArrowDown':'↓',
@@ -222,25 +220,18 @@ function doChangePw(){
     };
     function keyLabel(k) { return KEY_NAMES[k] || k; }
 
-    var def = {prev:'',next:'',tpl:'',cmt:''};
+    var def = {prev:'ArrowLeft',next:'ArrowRight',tpl:'T',cmt:'C'};
     var cur = {};
+    try{cur=JSON.parse(localStorage.getItem('pip_shortcuts')||'{}');}catch(e){}
+    for(var k in def) if(!cur[k]) cur[k]=def[k];
 
     var ids = ['skPrev','skNext','skTpl','skCmt'];
     var keys = ['prev','next','tpl','cmt'];
 
-    function initShortcuts(cfg){
-        if(cfg) cur = cfg;
-        for(var k in def) if(cur[k]===undefined) cur[k]=def[k];
-        for(var i=0;i<ids.length;i++){
-            var el = document.getElementById(ids[i]);
-            var v2 = cur[keys[i]] || '';
-            el.value = v2 ? keyLabel(v2) : '-';
-            el.setAttribute('data-key', v2);
-        }
-    }
-
     for(var i=0;i<ids.length;i++){
         var el = document.getElementById(ids[i]);
+        el.value = keyLabel(cur[keys[i]]);
+        el.setAttribute('data-key', cur[keys[i]]);
         el.readOnly = true;
         (function(el, keyName){
             el.addEventListener('keydown', function(e){
@@ -252,7 +243,9 @@ function doChangePw(){
                 el.setAttribute('data-key', k);
                 el.blur();
             });
-            el.addEventListener('focus', function(){ el.value = '...'; });
+            el.addEventListener('focus', function(){
+                el.value = '...';
+            });
             el.addEventListener('blur', function(){
                 var dk = el.getAttribute('data-key') || def[keyName];
                 el.value = keyLabel(dk);
@@ -260,43 +253,14 @@ function doChangePw(){
         })(el, keys[i]);
     }
 
-    window.initShortcuts = initShortcuts;
-    window.doResetShortcuts = function(){
-        if(!confirm('重置后所有快捷键将失效，看板无法通过键盘控制。确认重置？')) return;
-        var empty = {prev:'',next:'',tpl:'',cmt:''};
-        var msgEl = document.getElementById('skMsg');
-        msgEl.textContent = '重置中...';
-        fetch('/api/admin/config').then(function(r){return r.json()}).then(function(cfg){
-            cfg.pip_shortcuts = empty;
-            return fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-        }).then(function(r){
-            if(r.ok){
-                // 清空输入框
-                for(var i=0;i<ids.length;i++){
-                    var el = document.getElementById(ids[i]);
-                    el.value = '-';
-                    el.setAttribute('data-key', '');
-                }
-                msgEl.textContent = '已重置';
-                setTimeout(function(){msgEl.textContent='';},2000);
-            }
-        }).catch(function(){ msgEl.textContent = '重置失败'; });
-    };
     window.doSaveShortcuts = function(){
         var n = {};
         for(var i=0;i<ids.length;i++){
             n[keys[i]] = document.getElementById(ids[i]).getAttribute('data-key') || def[keys[i]];
         }
-        var msgEl = document.getElementById('skMsg');
-        msgEl.textContent = '保存中...';
-        // 先拉取服务端全量配置，合并后再保存（避免覆盖其他设置）
-        fetch('/api/admin/config').then(function(r){return r.json()}).then(function(cfg){
-            cfg.pip_shortcuts = n;
-            return fetch('/api/admin/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
-        }).then(function(r){
-            if(r.ok){ msgEl.textContent='已保存'; setTimeout(function(){msgEl.textContent='';},2000); }
-            else{ msgEl.textContent='保存失败'; }
-        }).catch(function(){ msgEl.textContent='保存失败'; });
+        localStorage.setItem('pip_shortcuts', JSON.stringify(n));
+        document.getElementById('skMsg').textContent = '已保存';
+        setTimeout(function(){document.getElementById('skMsg').textContent='';},2000);
     };
 })();
 </script>

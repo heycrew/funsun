@@ -291,8 +291,20 @@
         // ===== 桌面看板 (Picture-in-Picture) =====
         var _pipWin = null;
 
+        function stopAllAudio() {
+            Object.keys(audioState).forEach(function(k) {
+                if (audioState[k] && audioState[k].playing) {
+                    audioState[k].audio.pause();
+                    audioState[k].audio.currentTime = 0;
+                    audioState[k].playing = false;
+                    renderDualControls(audioState[k].idx, audioState[k].type);
+                }
+            });
+        }
+
         function openPipWindow() {
             if (_pipWin) {
+                stopAllAudio();
                 _pipWin.close();
                 _pipWin = null;
                 document.getElementById('pipBtn').classList.remove('pip-active');
@@ -316,6 +328,7 @@
 
                     // 监听 PiP 窗口关闭
                     pipWin.addEventListener('pagehide', function() {
+                        stopAllAudio();
                         _pipWin = null;
                         document.getElementById('pipBtn').classList.remove('pip-active');
                     });
@@ -325,6 +338,7 @@
                 })
                 .catch(function(err) {
                     console.error('PiP 打开失败:', err);
+                    stopAllAudio();
                     _pipWin = null;
                     document.getElementById('pipBtn').classList.remove('pip-active');
                 });
@@ -600,8 +614,13 @@
             var kilns = {};
             var totalPrice = 0;
             items.forEach(function(it) {
-                var k = it.kiln || '未知';
-                kilns[k] = (kilns[k] || 0) + 1;
+                var raw = it.kiln || '未知';
+                // 统计用归一化键（半角括号），显示用原名
+                var key = raw.replace(/（/g, '(').replace(/）/g, ')');
+                if (!kilns[key]) kilns[key] = { count: 0, label: raw };
+                kilns[key].count += 1;
+                // 保留全角括号的名字作为显示标签
+                if (raw.indexOf('（') >= 0) kilns[key].label = raw;
                 var p = parseFloat(String(it.starting_price || '0').replace(/[^0-9.]/g, ''));
                 if (!isNaN(p)) totalPrice += p;
             });
@@ -616,12 +635,13 @@
 
             // Kiln bars (默认显示前3，超出隐藏)
             setTimeout(runPrediction, 500);
-            var sortedKilns = Object.keys(kilns).sort(function(a,b){return kilns[b]-kilns[a];});
+            var sortedKilns = Object.keys(kilns).sort(function(a,b){return kilns[b].count - kilns[a].count;});
             var kb = '';
             sortedKilns.forEach(function(k, i){
-                var pct = (kilns[k] / total * 100).toFixed(1);
+                var info = kilns[k];
+                var pct = (info.count / total * 100).toFixed(1);
                 var extraCls = (i >= 3) ? ' kiln-hidden' : '';
-                kb += '<div class="kiln-row' + extraCls + '"><span class="kname">' + k + '</span><span class="kbar-wrap"><span class="kbar" style="width:' + pct + '%"></span></span><span class="kinfo">' + kilns[k] + ' 件 · ' + pct + '%</span></div>';
+                kb += '<div class="kiln-row' + extraCls + '"><span class="kname">' + info.label + '</span><span class="kbar-wrap"><span class="kbar" style="width:' + pct + '%"></span></span><span class="kinfo">' + info.count + ' 件 · ' + pct + '%</span></div>';
             });
             document.getElementById('kilnBars').innerHTML = kb;
             if (sortedKilns.length > 3) {
@@ -1161,6 +1181,8 @@
                 if (newText) {
                     if (resultsMap[idx]) resultsMap[idx].template_text = newText;
                     textEl.textContent = newText;
+                    // 同步保存到服务端快照（之前漏掉这步导致刷新丢失）
+                    fetch('/api/cache/update-commentary', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({index:idx,template_text:newText})}).catch(function(){});
                 }
                 editEl.classList.add('hidden'); saveBtn.classList.add('hidden');
                 textEl.classList.remove('hidden');
